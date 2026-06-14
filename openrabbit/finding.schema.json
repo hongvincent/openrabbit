@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openrabbit.dev/finding.schema.json",
+  "title": "openrabbit Finding",
+  "description": "A single structured AI code-review finding (SPEC 8.1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "file",
+    "startLine",
+    "endLine",
+    "side",
+    "severity",
+    "category",
+    "confidence",
+    "title",
+    "body",
+    "ruleId",
+    "fingerprint"
+  ],
+  "properties": {
+    "file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "startLine": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "endLine": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "side": {
+      "type": "string",
+      "enum": [
+        "LEFT",
+        "RIGHT"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "nit"
+      ]
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "correctness",
+        "security",
+        "performance",
+        "tests",
+        "maintainability"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "body": {
+      "type": "string"
+    },
+    "suggestion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ruleId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fingerprint": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
