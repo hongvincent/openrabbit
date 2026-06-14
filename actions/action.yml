@@ -1,0 +1,91 @@
+# openrabbit — composite action (PRD §11). A step-form alternative to the
+# reusable workflow for repos that prefer wiring openrabbit into an existing job
+# rather than calling a separate `workflow_call` workflow.
+#
+# The CALLER is responsible for granting least-privilege permissions on the job
+# that uses this action:
+#
+#   permissions:
+#     contents: read
+#     pull-requests: write   # to post the review
+#     id-token: write        # OIDC -> STS keyless Bedrock auth
+#
+# Every third-party action is SHA-pinned to a 40-hex commit with a trailing
+# version comment (SPEC §12 supply-chain hardening). The PR diff is untrusted
+# data; the reasoning layer holds no write credentials (advisory-only).
+name: openrabbit review
+description: >-
+  Run the openrabbit high-trust AI code review on a pull request using keyless
+  AWS Bedrock auth (GitHub OIDC -> STS). Posts an advisory review.
+author: openrabbit
+
+inputs:
+  pr:
+    description: "Pull request number to review."
+    required: true
+  commit:
+    description: "Head commit SHA being reviewed."
+    required: true
+  config:
+    description: "Path to .openrabbit.yaml (model_roles, lenses, gates)."
+    required: false
+    default: ".openrabbit.yaml"
+  aws_role_arn:
+    description: "ARN of the IAM role to assume for Bedrock (OIDC trust)."
+    required: true
+  aws_region:
+    description: "Primary AWS region for OIDC/STS (verifier/model region)."
+    required: false
+    default: "us-east-2"
+  python_version:
+    description: "Python version used to run openrabbit."
+    required: false
+    default: "3.12"
+  github_token:
+    description: "Token used to read the PR diff and post the review."
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    # Full history so openrabbit can compute the incremental diff and read
+    # enclosing context (fetch-depth tuned for diff).
+    - name: Checkout PR head
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      with:
+        ref: ${{ inputs.commit }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Install openrabbit
+      shell: bash
+      # Runtime deps only (the `openrabbit` console script + base deps). Dev
+      # extras (pytest/coverage) are for CI test jobs, not the hardened review
+      # runner — keeping them out trims install time and supply-chain surface.
+      run: uv sync
+
+    # Keyless Bedrock auth via OIDC -> STS. No static AWS secrets.
+    - name: Configure AWS credentials (OIDC)
+      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b  # v6.2.0
+      with:
+        role-to-assume: ${{ inputs.aws_role_arn }}
+        aws-region: ${{ inputs.aws_region }}
+        role-session-name: openrabbit-review-${{ github.run_id }}
+
+    - name: Run openrabbit review
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: >-
+        uv run openrabbit review
+        --repo ${{ github.repository }}
+        --pr ${{ inputs.pr }}
+        --commit ${{ inputs.commit }}
+        --config ${{ inputs.config }}
+        --post
