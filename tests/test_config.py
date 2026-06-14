@@ -18,6 +18,7 @@ from openrabbit.config import (
     ReviewConfig,
     Telemetry,
     load_config,
+    validate_model_roles,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -184,6 +185,23 @@ def test_invalid_lens_rejected():
         load_config({"review": {"lenses": ["correctness", "bogus"]}})
 
 
+def test_verify_min_severity_default_is_high():
+    # By default only HIGH/CRITICAL findings route through the expensive
+    # cross-family verifier (SPEC 7.3 cost lever #3).
+    cfg = load_config({})
+    assert cfg.review.verify_min_severity == "high"
+
+
+def test_verify_min_severity_configurable():
+    cfg = load_config({"review": {"verify_min_severity": "medium"}})
+    assert cfg.review.verify_min_severity == "medium"
+
+
+def test_verify_min_severity_invalid_rejected():
+    with pytest.raises(ConfigError):
+        load_config({"review": {"verify_min_severity": "spicy"}})
+
+
 def test_invalid_telemetry_mode_rejected():
     with pytest.raises(ConfigError):
         load_config({"telemetry": {"mode": "always"}})
@@ -202,3 +220,130 @@ def test_non_mapping_top_level_rejected():
 def test_path_instruction_missing_fields_rejected():
     with pytest.raises(ConfigError):
         load_config({"review": {"path_instructions": [{"path": "src/**"}]}})
+
+
+# --------------------------------------------------------------------------- #
+# model_roles validation against Bedrock allow-lists / regions (SPEC 7.2/8.2) #
+# --------------------------------------------------------------------------- #
+def test_gpt_verifier_in_us_east_2_loads_clean():
+    cfg = load_config(
+        {"model_roles": {"verifier": {"model": "openai.gpt-5.5", "region": "us-east-2"}}}
+    )
+    assert cfg.model_roles["verifier"].region == "us-east-2"
+    # no hard errors, no warnings for an in-allow-list GPT-5.5
+    assert validate_model_roles(cfg) == []
+
+
+def test_gpt_verifier_in_seoul_is_config_error():
+    with pytest.raises(ConfigError) as exc:
+        load_config(
+            {
+                "model_roles": {
+                    "verifier": {"model": "openai.gpt-5.5", "region": "ap-northeast-2"}
+                }
+            }
+        )
+    # the error names the offending region + role
+    assert "ap-northeast-2" in str(exc.value)
+    assert "verifier" in str(exc.value)
+
+
+def test_gpt_verifier_via_profile_in_seoul_is_config_error():
+    with pytest.raises(ConfigError):
+        load_config(
+            {
+                "model_roles": {
+                    "verifier": {
+                        "model": "us.openai.gpt-5.5",
+                        "region": "ap-northeast-2",
+                    }
+                }
+            }
+        )
+
+
+def test_nova_finder_in_seoul_loads_clean():
+    cfg = load_config(
+        {"model_roles": {"finder": {"model": "amazon.nova-pro-v1:0", "region": "ap-northeast-2"}}}
+    )
+    assert validate_model_roles(cfg) == []
+
+
+def test_unknown_model_id_is_warning_not_error():
+    # An unknown model must NOT block load_config (soft), but should warn.
+    cfg = load_config(
+        {"model_roles": {"finder": {"model": "amazon.titan-imaginary-v9:0", "region": "us-east-1"}}}
+    )
+    warnings = validate_model_roles(cfg)
+    assert len(warnings) == 1
+    assert "finder" in warnings[0]
+    assert "amazon.titan-imaginary-v9:0" in warnings[0]
+
+
+def test_nova_off_allowlist_region_is_warning_not_error():
+    cfg = load_config(
+        {"model_roles": {"finder": {"model": "amazon.nova-pro-v1:0", "region": "eu-west-3"}}}
+    )
+    warnings = validate_model_roles(cfg)
+    assert len(warnings) == 1
+    assert "eu-west-3" in warnings[0]
+    assert "finder" in warnings[0]
+
+
+def test_claude_premium_in_us_east_1_loads_clean():
+    cfg = load_config(
+        {
+            "model_roles": {
+                "premium": {
+                    "model": "global.anthropic.claude-opus-4-6-v1",
+                    "region": "us-east-1",
+                    "enabled": False,
+                }
+            }
+        }
+    )
+    assert validate_model_roles(cfg) == []
+
+
+def test_validate_model_roles_collects_multiple_warnings():
+    cfg = load_config(
+        {
+            "model_roles": {
+                "finder": {"model": "amazon.nova-pro-v1:0", "region": "eu-west-3"},
+                "triage": {"model": "amazon.mystery-v1:0", "region": "us-east-1"},
+            }
+        }
+    )
+    warnings = validate_model_roles(cfg)
+    assert len(warnings) == 2
+
+
+def test_model_role_missing_region_is_warning():
+    cfg = load_config({"model_roles": {"finder": {"model": "amazon.nova-pro-v1:0"}}})
+    warnings = validate_model_roles(cfg)
+    assert len(warnings) == 1
+    assert "finder" in warnings[0]
+
+
+def test_packaged_example_has_no_model_role_warnings():
+    cfg = load_config(EXAMPLE)
+    assert validate_model_roles(cfg) == []
+
+
+def test_load_config_collect_warnings_surfaces_soft_issues():
+    # load_config can return soft warnings to the caller without raising.
+    cfg, warnings = load_config(
+        {"model_roles": {"finder": {"model": "amazon.nova-pro-v1:0", "region": "eu-west-3"}}},
+        collect_warnings=True,
+    )
+    assert isinstance(cfg, Config)
+    assert len(warnings) == 1
+    assert "eu-west-3" in warnings[0]
+
+
+def test_load_config_collect_warnings_still_raises_hard_errors():
+    with pytest.raises(ConfigError):
+        load_config(
+            {"model_roles": {"verifier": {"model": "openai.gpt-5.5", "region": "ap-northeast-2"}}},
+            collect_warnings=True,
+        )

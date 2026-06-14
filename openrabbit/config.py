@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Mapping, Optional, Union, overload
+
+from openrabbit.bedrock_models import Severity, validate_model_region
 
 # --------------------------------------------------------------------------- #
 # vocabularies & defaults                                                     #
@@ -22,10 +24,18 @@ from typing import Any, Mapping, Optional, Union
 PROFILES = ("chill", "balanced", "assertive")
 LENSES = ("correctness", "security", "performance", "tests", "maintainability")
 TELEMETRY_MODES = ("opt-in", "opt-out")
+# Severity vocabulary ordered most→least severe; index = rank (0 = critical).
+# Mirrors openrabbit.findings.SEVERITIES (kept independent here so config has no
+# import-time dependency on the findings contract).
+SEVERITIES = ("critical", "high", "medium", "low", "nit")
 
 DEFAULT_CONFIDENCE_GATE = 0.80
 DEFAULT_PROFILE = "balanced"
 DEFAULT_LENSES = list(LENSES)
+# Only HIGH/CRITICAL findings route through the expensive cross-family verifier
+# by default; everything below takes the cheaper finder-confidence path (SPEC
+# 7.3 cost lever #3). Widen via review.verify_min_severity.
+DEFAULT_VERIFY_MIN_SEVERITY = "high"
 
 PathLike = Union[str, Path]
 
@@ -55,6 +65,9 @@ class ReviewConfig:
     path_filters: list[str] = field(default_factory=list)
     path_instructions: list[PathInstruction] = field(default_factory=list)
     lenses: list[str] = field(default_factory=lambda: list(DEFAULT_LENSES))
+    #: Minimum severity routed through the (expensive) cross-family verifier;
+    #: less-severe findings take the cheaper finder-confidence path.
+    verify_min_severity: str = DEFAULT_VERIFY_MIN_SEVERITY
 
 
 @dataclass(frozen=True)
@@ -99,11 +112,26 @@ class Config:
 # --------------------------------------------------------------------------- #
 # public API                                                                  #
 # --------------------------------------------------------------------------- #
-def load_config(source: Union[PathLike, Mapping[str, Any]]) -> Config:
+@overload
+def load_config(source: Union[PathLike, Mapping[str, Any]]) -> Config: ...
+@overload
+def load_config(
+    source: Union[PathLike, Mapping[str, Any]], *, collect_warnings: bool
+) -> Union[Config, tuple[Config, list[str]]]: ...
+
+
+def load_config(
+    source: Union[PathLike, Mapping[str, Any]], *, collect_warnings: bool = False
+) -> Union[Config, tuple[Config, list[str]]]:
     """Load and validate a config from a path or an already-parsed mapping.
 
-    Raises :class:`ConfigError` for missing files, parse errors, or invalid
-    values.
+    Raises :class:`ConfigError` for missing files, parse errors, invalid values,
+    or **hard** ``model_roles`` problems (e.g. GPT-5.5 in an unsupported region —
+    its endpoint does not exist there). Soft ``model_roles`` issues (unknown
+    model id, off-allow-list region for a Converse model) never block the load.
+
+    By default returns the :class:`Config`. Pass ``collect_warnings=True`` to get
+    ``(Config, warnings)`` so callers can surface soft warnings (CLI/log).
     """
     if isinstance(source, Mapping):
         data: Any = dict(source)
@@ -120,7 +148,60 @@ def load_config(source: Union[PathLike, Mapping[str, Any]]) -> Config:
             f"config root must be a mapping, got {type(data).__name__}"
         )
 
-    return _parse(dict(data))
+    config = _parse(dict(data))
+
+    # Validate model_roles against Bedrock allow-lists/regions. Hard errors raise
+    # immediately; soft warnings are returned only when the caller asks.
+    errors, warnings = _classify_model_role_verdicts(config)
+    if errors:
+        raise ConfigError("; ".join(errors))
+
+    if collect_warnings:
+        return config, warnings
+    return config
+
+
+def validate_model_roles(config: Config) -> list[str]:
+    """Return human-readable problems with ``config.model_roles`` (SPEC 7.2/8.2).
+
+    Each role's model id is checked against :mod:`openrabbit.bedrock_models`:
+    the model must be recognized (else a warning), its region must be in the
+    model's allow-list (a **hard error** for GPT-5.5 outside us-east-1/2; a
+    warning for soft-region Converse models), and so on. Messages are prefixed
+    with their severity and role so a caller (CLI/log) can present them directly.
+
+    This is the soft, *non-raising* surface — it returns *all* problems (warnings
+    and errors). :func:`load_config` consults the underlying verdicts to decide
+    what raises; a clean config yields ``[]``.
+    """
+    messages: list[str] = []
+    for role, spec in sorted(config.model_roles.items()):
+        verdict = validate_model_region(spec.model, spec.region)
+        if verdict is None:
+            continue
+        messages.append(f"[{verdict.severity.value}] model_roles.{role}: {verdict.message}")
+    return messages
+
+
+def _classify_model_role_verdicts(config: Config) -> tuple[list[str], list[str]]:
+    """Split model-role verdicts into ``(hard_errors, soft_warnings)``.
+
+    Same checks as :func:`validate_model_roles` but keyed on the structured
+    :class:`~openrabbit.bedrock_models.Severity` so :func:`load_config` can raise
+    on errors while merely collecting warnings.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    for role, spec in sorted(config.model_roles.items()):
+        verdict = validate_model_region(spec.model, spec.region)
+        if verdict is None:
+            continue
+        msg = f"model_roles.{role}: {verdict.message}"
+        if verdict.severity is Severity.ERROR:
+            errors.append(msg)
+        else:
+            warnings.append(f"[{verdict.severity.value}] {msg}")
+    return errors, warnings
 
 
 # --------------------------------------------------------------------------- #
@@ -194,6 +275,13 @@ def _parse_review(raw: Any) -> ReviewConfig:
 
     instructions = _parse_path_instructions(block.get("path_instructions", []) or [])
 
+    verify_min_severity = block.get("verify_min_severity", DEFAULT_VERIFY_MIN_SEVERITY)
+    if verify_min_severity not in SEVERITIES:
+        raise ConfigError(
+            "review.verify_min_severity must be one of "
+            f"{SEVERITIES}, got {verify_min_severity!r}"
+        )
+
     return ReviewConfig(
         profile=profile,
         confidence_gate=float(gate),
@@ -201,6 +289,7 @@ def _parse_review(raw: Any) -> ReviewConfig:
         path_filters=list(path_filters),
         path_instructions=instructions,
         lenses=list(lenses),
+        verify_min_severity=verify_min_severity,
     )
 
 

@@ -89,13 +89,18 @@ def _emit_findings_result(findings: list[dict[str, Any]]) -> CompletionResult:
 
 
 def _verify_result(confidence: float) -> CompletionResult:
+    """A batched verify result keeping the single demo finding (verdict id 0)."""
     return CompletionResult(
         text="",
         tool_calls=[
             ToolCall(
                 id="v",
-                name="verify_finding",
-                args={"keep": True, "confidence": confidence, "rationale": "demo"},
+                name="verify_findings",
+                args={
+                    "verdicts": [
+                        {"id": 0, "keep": True, "confidence": confidence, "rationale": "demo"}
+                    ]
+                },
             )
         ],
         finish_reason=FinishReason.TOOL_USE,
@@ -138,8 +143,19 @@ def _count_lens_calls(config: Config, diff: str) -> int:
 # --------------------------------------------------------------------------- #
 # review command                                                              #
 # --------------------------------------------------------------------------- #
+def _open_learnings_store(args: argparse.Namespace) -> Optional[Any]:
+    """Build a :class:`LearningsStore` if ``--learnings-store`` was given."""
+    path = getattr(args, "learnings_store", None)
+    if not path:
+        return None
+    from openrabbit.learnings import LearningsStore
+
+    return LearningsStore(path)
+
+
 def _cmd_review(args: argparse.Namespace) -> int:
     config = _load_config_or_default(args.config)
+    learnings_store = _open_learnings_store(args)
 
     if args.offline:
         diff = _read_diff(args.diff, sys.stdin)
@@ -149,18 +165,26 @@ def _cmd_review(args: argparse.Namespace) -> int:
             "draft": False,
             "state": "open",
             "head_sha": args.commit or "OFFLINE",
+            "repo": args.repo or "",
             "diff": diff,
             "title": args.title or "",
             "body": args.body or "",
         }
-        result = orch.review(config, pr_context, providers)
+        result = orch.review(
+            config, pr_context, providers, learnings_store=learnings_store
+        )
         _print_result(result)
         return 0
 
-    return _cmd_review_online(args, config)
+    return _cmd_review_online(args, config, learnings_store=learnings_store)
 
 
-def _cmd_review_online(args: argparse.Namespace, config: Config) -> int:
+def _cmd_review_online(
+    args: argparse.Namespace,
+    config: Config,
+    *,
+    learnings_store: Optional[Any] = None,
+) -> int:
     """Online review: GitHub adapter + real Bedrock providers (needs creds)."""
     import os
 
@@ -208,6 +232,7 @@ def _cmd_review_online(args: argparse.Namespace, config: Config) -> int:
             config,
             pr_context,
             providers,
+            learnings_store=learnings_store,
             prior_fingerprints=prior_fps,
             enclosing_fetcher=fetcher,
             emit=False,
@@ -248,14 +273,103 @@ def _cmd_review_online(args: argparse.Namespace, config: Config) -> int:
         adapter.close()
 
 
+# --------------------------------------------------------------------------- #
+# learn command — offline feedback-capture hook (SPEC 10, item 7c)            #
+# --------------------------------------------------------------------------- #
+def _cmd_learn(args: argparse.Namespace) -> int:
+    """Capture feedback into the local learnings store (offline, no creds).
+
+    Two sub-actions, mirroring the two memory kinds (SPEC 10):
+
+    * ``--text`` records a team learning (provenance + category) for a scope
+      (a repo ``OWNER/NAME`` or an org ``OWNER``); injected into future reviews'
+      cacheable prefix.
+    * ``--dismiss`` records a dismissal (negative signal) for a finding shape
+      (``--rule-id`` + ``--category`` + ``--file``) under ``--repo``; future
+      similar findings are down-weighted below the gate.
+
+    Online feedback (GitHub thread resolve/dismiss state) is derivable later
+    without changing this offline hook.
+    """
+    from openrabbit.learnings import LearningsStore
+
+    store = LearningsStore(args.store)
+
+    if args.dismiss:
+        if not (args.repo and args.rule_id and args.category and args.file):
+            print(
+                "error: --dismiss needs --repo, --rule-id, --category, --file",
+                file=sys.stderr,
+            )
+            return 2
+        # Build a minimal Finding shape; only (rule_id, category, file) matter
+        # for the dismissal signal. confidence/lines/title are placeholders.
+        from openrabbit.findings import Finding, compute_fingerprint
+
+        fp = compute_fingerprint(args.file, args.rule_id, args.category)
+        finding = Finding(
+            file=args.file,
+            start_line=1,
+            end_line=1,
+            side="RIGHT",
+            severity="low",
+            category=args.category,
+            confidence=0.0,
+            title=f"dismissed: {args.rule_id}",
+            body="",
+            rule_id=args.rule_id,
+            fingerprint=fp,
+        )
+        store.record_dismissal(args.repo, finding)
+        print(json.dumps({"recorded": "dismissal", "ruleId": args.rule_id}))
+        return 0
+
+    if args.text:
+        scope = args.scope or args.repo
+        if not scope:
+            print("error: --text needs --scope OWNER[/NAME] (or --repo)", file=sys.stderr)
+            return 2
+        provenance = {
+            "pr": args.pr if args.pr is not None else "",
+            "file": args.file or "",
+            "user": args.user or "",
+        }
+        learning = store.add_learning(
+            scope=scope,
+            text=args.text,
+            provenance=provenance,
+            category=args.category or "maintainability",
+        )
+        print(json.dumps({"recorded": "learning", "id": learning.id}))
+        return 0
+
+    print("error: pass --text <learning> or --dismiss", file=sys.stderr)
+    return 2
+
+
 def _print_result(result: orch.ReviewResult) -> None:
+    cost = result.cost_summary.to_dict()
     payload = {
         "reviewed": result.reviewed,
         "reason": result.reason,
         "rawFindingCount": result.raw_finding_count,
         "findings": [f.to_dict() for f in result.findings],
         "emitted": result.emitted,
+        # Per-PR cost telemetry (SPEC 7.3): token totals + optional $ estimate.
+        "cost": cost,
     }
+    # Log the cost line to stderr so CI logs surface it without polluting the
+    # JSON on stdout (which downstream tooling parses).
+    usd = cost.get("usdEstimate")
+    usd_str = f"${usd}" if usd is not None else "n/a"
+    print(
+        "openrabbit cost: "
+        f"calls={cost['calls']} "
+        f"in={cost['inputTokens']} out={cost['outputTokens']} "
+        f"cacheRead={cost['cacheRead']} cacheWrite={cost['cacheWrite']} "
+        f"estimate={usd_str}",
+        file=sys.stderr,
+    )
     print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
@@ -278,7 +392,35 @@ def build_parser() -> argparse.ArgumentParser:
     rev.add_argument("--body", help="PR body")
     rev.add_argument("--bot-login", dest="bot_login", help="bot login for dedup (online)")
     rev.add_argument("--post", action="store_true", help="actually post the review (online)")
+    rev.add_argument(
+        "--learnings-store",
+        dest="learnings_store",
+        help="path to a local learnings JSON store (enables memory + feedback loop)",
+    )
     rev.set_defaults(func=_cmd_review)
+
+    learn = sub.add_parser(
+        "learn", help="record feedback into the learnings store (offline, no creds)"
+    )
+    learn.add_argument(
+        "--store",
+        required=True,
+        help="path to the learnings JSON store (created if absent)",
+    )
+    learn.add_argument("--text", help="a team learning to record (with --scope/--repo)")
+    learn.add_argument(
+        "--dismiss",
+        action="store_true",
+        help="record a dismissal (needs --repo, --rule-id, --category, --file)",
+    )
+    learn.add_argument("--scope", help="learning scope: OWNER (org) or OWNER/NAME (repo)")
+    learn.add_argument("--repo", help="OWNER/NAME (dismissal repo / learning scope)")
+    learn.add_argument("--rule-id", dest="rule_id", help="finding ruleId (dismissal)")
+    learn.add_argument("--category", help="finding category")
+    learn.add_argument("--file", help="finding file path / learning provenance file")
+    learn.add_argument("--pr", type=int, help="PR number (learning provenance)")
+    learn.add_argument("--user", help="author (learning provenance)")
+    learn.set_defaults(func=_cmd_learn)
     return parser
 
 

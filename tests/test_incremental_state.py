@@ -94,13 +94,23 @@ def _emit_findings_result(findings: list[dict]) -> CompletionResult:
 
 
 def _verify_result(confidence: float, keep: bool = True) -> CompletionResult:
+    """A batched verify result with a single verdict (id 0) for one finding."""
     return CompletionResult(
         text="",
         tool_calls=[
             ToolCall(
                 id="v1",
-                name="verify_finding",
-                args={"keep": keep, "confidence": confidence, "rationale": "ok"},
+                name="verify_findings",
+                args={
+                    "verdicts": [
+                        {
+                            "id": 0,
+                            "keep": keep,
+                            "confidence": confidence,
+                            "rationale": "ok",
+                        }
+                    ]
+                },
             )
         ],
         finish_reason=FinishReason.TOOL_USE,

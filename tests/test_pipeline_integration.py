@@ -127,13 +127,35 @@ def _emit_findings_result(findings: list[dict]) -> CompletionResult:
 
 
 def _verify_result(confidence: float, keep: bool = True) -> CompletionResult:
+    """A single-verdict batch result (verifier called once for one finding)."""
+    return _verify_batch_result([(0, keep, confidence)])
+
+
+def _verify_batch_result(
+    verdicts: list[tuple[int, bool, float]],
+) -> CompletionResult:
+    """A batched ``verify_findings`` tool call returning a verdict array.
+
+    Each tuple is ``(id, keep, confidence)`` where ``id`` is the stable index
+    into the verifier's batch (so verdicts map back to findings by id).
+    """
     return CompletionResult(
         text="",
         tool_calls=[
             ToolCall(
                 id="v1",
-                name="verify_finding",
-                args={"keep": keep, "confidence": confidence, "rationale": "ok"},
+                name="verify_findings",
+                args={
+                    "verdicts": [
+                        {
+                            "id": vid,
+                            "keep": keep,
+                            "confidence": conf,
+                            "rationale": "ok",
+                        }
+                        for vid, keep, conf in verdicts
+                    ]
+                },
             )
         ],
         finish_reason=FinishReason.TOOL_USE,
@@ -388,51 +410,170 @@ class TestRunLenses:
 # --------------------------------------------------------------------------- #
 # verify                                                                       #
 # --------------------------------------------------------------------------- #
-class TestVerify:
-    def _finding(self, conf: float, rule: str = "openrabbit/security/sqli") -> Finding:
-        fp = compute_fingerprint("src/api/auth.py", rule, "ctx")
-        return Finding(
-            file="src/api/auth.py",
-            start_line=12,
-            end_line=14,
-            side="RIGHT",
-            severity="high",
-            category="security",
-            confidence=0.9,
-            title="t",
-            body="b",
-            rule_id=rule,
-            fingerprint=fp,
-        )
+def _finding(
+    conf: float = 0.9,
+    *,
+    severity: str = "high",
+    rule: str = "openrabbit/security/sqli",
+    file: str = "src/api/auth.py",
+) -> Finding:
+    fp = compute_fingerprint(file, rule, f"ctx-{conf}-{severity}")
+    return Finding(
+        file=file,
+        start_line=12,
+        end_line=14,
+        side="RIGHT",
+        severity=severity,
+        category="security",
+        confidence=conf,
+        title="t",
+        body="b",
+        rule_id=rule,
+        fingerprint=fp,
+    )
 
+
+class TestVerify:
     def test_drops_below_gate(self, config):
         verifier = FakeProvider([_verify_result(0.5, keep=True)])
-        kept = verify_mod.verify_findings(
-            verifier, [self._finding(0.9)], gate=0.80
-        )
+        kept = verify_mod.verify_findings(verifier, [_finding(0.9)], gate=0.80)
         assert kept == []
 
     def test_keeps_above_gate(self, config):
         verifier = FakeProvider([_verify_result(0.95, keep=True)])
-        kept = verify_mod.verify_findings(
-            verifier, [self._finding(0.9)], gate=0.80
-        )
+        kept = verify_mod.verify_findings(verifier, [_finding(0.9)], gate=0.80)
         assert len(kept) == 1
         assert kept[0].confidence == pytest.approx(0.95)
 
     def test_refuted_dropped(self, config):
         verifier = FakeProvider([_verify_result(0.95, keep=False)])
-        kept = verify_mod.verify_findings(
-            verifier, [self._finding(0.9)], gate=0.80
-        )
+        kept = verify_mod.verify_findings(verifier, [_finding(0.9)], gate=0.80)
         assert kept == []
 
     def test_untrusted_fencing_in_prompt(self, config):
         verifier = FakeProvider([_verify_result(0.95, keep=True)])
-        verify_mod.verify_findings(verifier, [self._finding(0.9)], gate=0.80)
+        verify_mod.verify_findings(verifier, [_finding(0.9)], gate=0.80)
         msg = verifier.calls[0].messages[0]
         body = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
         assert "UNTRUSTED" in body.upper()
+
+
+class TestVerifyBatchingAndScoping:
+    """Item 8: batching (kill the N+1) + HIGH/CRITICAL severity scoping."""
+
+    def test_batches_n_findings_into_one_call(self, config):
+        # Three HIGH findings -> exactly ONE verifier call (not three).
+        findings = [
+            _finding(0.9, rule="r1"),
+            _finding(0.9, rule="r2"),
+            _finding(0.9, rule="r3"),
+        ]
+        verifier = FakeProvider(
+            [_verify_batch_result([(0, True, 0.91), (1, True, 0.92), (2, True, 0.93)])]
+        )
+        kept = verify_mod.verify_findings(verifier, findings, gate=0.80)
+        assert len(verifier.calls) == 1  # N+1 killed: ONE call for N findings
+        assert len(kept) == 3
+
+    def test_verdict_to_finding_mapping_by_id(self, config):
+        # Verdicts arrive out of order and the calibrated score must land on the
+        # right finding (mapped by stable id, not position).
+        findings = [
+            _finding(0.9, rule="r1"),
+            _finding(0.9, rule="r2"),
+            _finding(0.9, rule="r3"),
+        ]
+        verifier = FakeProvider(
+            [_verify_batch_result([(2, True, 0.93), (0, True, 0.91), (1, False, 0.99)])]
+        )
+        kept = verify_mod.verify_findings(verifier, findings, gate=0.80)
+        by_rule = {f.rule_id: f for f in kept}
+        assert set(by_rule) == {"r1", "r3"}  # r2 refuted (keep=False) → dropped
+        assert by_rule["r1"].confidence == pytest.approx(0.91)
+        assert by_rule["r3"].confidence == pytest.approx(0.93)
+
+    def test_gate_still_drops_low_confidence_in_batch(self, config):
+        findings = [_finding(0.9, rule="r1"), _finding(0.9, rule="r2")]
+        verifier = FakeProvider(
+            [_verify_batch_result([(0, True, 0.95), (1, True, 0.40)])]
+        )
+        kept = verify_mod.verify_findings(verifier, findings, gate=0.80)
+        assert [f.rule_id for f in kept] == ["r1"]  # r2 below gate → dropped
+
+    def test_only_high_critical_verified_by_default(self, config):
+        # MEDIUM/LOW/nit findings must NOT hit the expensive verifier; HIGH and
+        # CRITICAL do. With one HIGH + one CRITICAL + one MEDIUM + one LOW, the
+        # verifier batch carries exactly the two severe ones.
+        findings = [
+            _finding(0.95, severity="high", rule="r-high"),
+            _finding(0.95, severity="critical", rule="r-crit"),
+            _finding(0.95, severity="medium", rule="r-med"),
+            _finding(0.95, severity="low", rule="r-low"),
+        ]
+        verifier = FakeProvider(
+            [_verify_batch_result([(0, True, 0.90), (1, True, 0.90)])]
+        )
+        kept = verify_mod.verify_findings(
+            verifier, findings, gate=0.80, min_severity="high"
+        )
+        # Exactly one verifier call carrying the two severe findings.
+        assert len(verifier.calls) == 1
+        # The cheaper-path (medium/low) findings still survive via the gate
+        # using their finder confidence (0.95 >= 0.80), so all 4 are kept.
+        assert {f.rule_id for f in kept} == {"r-high", "r-crit", "r-med", "r-low"}
+
+    def test_cheaper_path_findings_apply_gate_without_verifier(self, config):
+        # A MEDIUM finding below the gate is dropped WITHOUT a verifier call.
+        findings = [_finding(0.50, severity="medium", rule="r-med")]
+        verifier = FakeProvider([])  # must never be called
+        kept = verify_mod.verify_findings(
+            verifier, findings, gate=0.80, min_severity="high"
+        )
+        assert kept == []
+        assert verifier.calls == []
+
+    def test_no_verifier_call_when_nothing_severe(self, config):
+        # All findings below the severity threshold -> ZERO verifier calls.
+        findings = [
+            _finding(0.95, severity="medium", rule="r1"),
+            _finding(0.95, severity="low", rule="r2"),
+        ]
+        verifier = FakeProvider([])
+        kept = verify_mod.verify_findings(
+            verifier, findings, gate=0.80, min_severity="high"
+        )
+        assert verifier.calls == []
+        assert {f.rule_id for f in kept} == {"r1", "r2"}
+
+    def test_config_can_widen_scope_to_medium(self, config):
+        # Widening min_severity=medium routes MEDIUM through the verifier too.
+        findings = [
+            _finding(0.95, severity="high", rule="r-high"),
+            _finding(0.95, severity="medium", rule="r-med"),
+            _finding(0.95, severity="low", rule="r-low"),
+        ]
+        verifier = FakeProvider(
+            [_verify_batch_result([(0, True, 0.90), (1, True, 0.90)])]
+        )
+        kept = verify_mod.verify_findings(
+            verifier, findings, gate=0.80, min_severity="medium"
+        )
+        assert len(verifier.calls) == 1
+        # batch carried 2 (high + medium); low took the cheaper path and survived
+        assert {f.rule_id for f in kept} == {"r-high", "r-med", "r-low"}
+
+    def test_empty_findings_no_call(self, config):
+        verifier = FakeProvider([])
+        assert verify_mod.verify_findings(verifier, [], gate=0.80) == []
+        assert verifier.calls == []
+
+    def test_missing_verdict_for_id_drops_that_finding(self, config):
+        # If the verifier omits a verdict for a finding's id, that finding is
+        # dropped (find-broad/filter-strict: no verdict == not surfaced).
+        findings = [_finding(0.9, rule="r1"), _finding(0.9, rule="r2")]
+        verifier = FakeProvider([_verify_batch_result([(0, True, 0.95)])])
+        kept = verify_mod.verify_findings(verifier, findings, gate=0.80)
+        assert [f.rule_id for f in kept] == ["r1"]
 
 
 # --------------------------------------------------------------------------- #
@@ -528,8 +669,10 @@ class TestOrchestratorEndToEnd:
                 ),
             ]
         )
-        # Verifier called once per surviving finding. Keep both, high confidence.
-        verifier = FakeProvider([_verify_result(0.95), _verify_result(0.92)])
+        # Verifier called ONCE for the whole batch (N+1 killed). Keep both.
+        verifier = FakeProvider(
+            [_verify_batch_result([(0, True, 0.95), (1, True, 0.92)])]
+        )
 
         result = orch_mod.review(
             config,
@@ -617,7 +760,9 @@ class TestOrchestratorEndToEnd:
                 ),
             ]
         )
-        verifier = FakeProvider([_verify_result(0.10), _verify_result(0.20)])
+        verifier = FakeProvider(
+            [_verify_batch_result([(0, True, 0.10), (1, True, 0.20)])]
+        )
         result = orch_mod.review(
             config,
             pr_context={
@@ -692,6 +837,209 @@ class TestOrchestratorEndToEnd:
             store=store,
         )
         assert store.last_reviewed_sha("acme/repo", 7) == "sha-xyz"
+
+
+# --------------------------------------------------------------------------- #
+# context cache key (byte-stable per-PR marker)                                #
+# --------------------------------------------------------------------------- #
+class TestCacheKey:
+    def test_byte_stable_across_files_in_a_pr(self, config):
+        # The cache key derived from the same prefix + PR identity must be
+        # identical regardless of which file is being reviewed (the whole point
+        # of prompt caching: cache the shared prefix once per PR).
+        pr = {"repo": "acme/repo", "number": 7, "title": "T", "body": "B"}
+        prefix = ctx_mod.build_prefix(config, pr)
+        k1 = ctx_mod.build_cache_key(prefix, pr)
+        k2 = ctx_mod.build_cache_key(prefix, pr)
+        assert k1 == k2
+        assert k1.startswith("openrabbit-")
+
+    def test_distinct_across_prs(self, config):
+        prefix = ctx_mod.build_prefix(config, {"title": "T"})
+        k1 = ctx_mod.build_cache_key(prefix, {"repo": "acme/repo", "number": 7})
+        k2 = ctx_mod.build_cache_key(prefix, {"repo": "acme/repo", "number": 8})
+        assert k1 != k2
+
+    def test_changes_when_prefix_changes(self, config):
+        pr = {"repo": "acme/repo", "number": 7}
+        a = ctx_mod.build_cache_key(ctx_mod.build_prefix(config, pr), pr)
+        b = ctx_mod.build_cache_key("DIFFERENT-PREFIX", pr)
+        assert a != b
+
+    def test_falls_back_to_head_sha_without_repo(self, config):
+        prefix = ctx_mod.build_prefix(config, {})
+        k = ctx_mod.build_cache_key(prefix, {"head_sha": "deadbeef"})
+        assert k.startswith("openrabbit-")
+        # Same prefix + same sha -> same key.
+        assert k == ctx_mod.build_cache_key(prefix, {"head_sha": "deadbeef"})
+
+
+# --------------------------------------------------------------------------- #
+# prompt-cache plumbing through the spine                                       #
+# --------------------------------------------------------------------------- #
+class TestCachePlumbing:
+    def _two_file_diff(self) -> str:
+        return (
+            "diff --git a/src/api/auth.py b/src/api/auth.py\n"
+            "--- a/src/api/auth.py\n+++ b/src/api/auth.py\n"
+            "@@ -1 +1,2 @@\n+x = 1\n+y = 2\n"
+            "diff --git a/src/api/billing.py b/src/api/billing.py\n"
+            "--- a/src/api/billing.py\n+++ b/src/api/billing.py\n"
+            "@@ -1 +1,2 @@\n+a = 1\n+b = 2\n"
+        )
+
+    def test_same_cache_prefix_for_two_files_of_same_pr(self, config):
+        # Two reviewable files, both routed to correctness+security -> 4 finder
+        # calls; the cache_prefix passed to the provider must be IDENTICAL across
+        # all of them (one cacheable prefix per PR).
+        finder = FakeProvider([_emit_findings_result([]) for _ in range(8)])
+        verifier = FakeProvider([])
+        orch_mod.review(
+            config,
+            pr_context={
+                "draft": False,
+                "state": "open",
+                "head_sha": "abc",
+                "repo": "acme/repo",
+                "number": 7,
+                "diff": self._two_file_diff(),
+            },
+            providers={"finder": finder, "verifier": verifier},
+        )
+        keys = {c.cache_prefix for c in finder.calls}
+        assert len(finder.calls) >= 2
+        assert len(keys) == 1  # one byte-stable key for the whole PR
+        assert next(iter(keys)) is not None  # caching actually activated
+
+    def test_cache_prefix_set_when_prefix_given(self, config):
+        finder = FakeProvider([_emit_findings_result([]), _emit_findings_result([])])
+        verifier = FakeProvider([])
+        orch_mod.review(
+            config,
+            pr_context={
+                "draft": False,
+                "state": "open",
+                "head_sha": "abc",
+                "repo": "acme/repo",
+                "number": 7,
+                "diff": SAMPLE_DIFF,
+            },
+            providers={"finder": finder, "verifier": verifier},
+        )
+        assert all(c.cache_prefix for c in finder.calls)
+        expected = ctx_mod.build_cache_key(
+            ctx_mod.build_prefix(config, {"repo": "acme/repo", "number": 7}),
+            {"repo": "acme/repo", "number": 7},
+        )
+        assert finder.calls[0].cache_prefix == expected
+
+
+# --------------------------------------------------------------------------- #
+# per-PR cost telemetry (Usage aggregation + CostSummary)                       #
+# --------------------------------------------------------------------------- #
+class TestCostTelemetry:
+    def test_usage_summed_across_all_model_calls(self, config):
+        from openrabbit.domain import Usage
+
+        # 2 finder calls (100/50 each) + 1 verifier batch call (80/20).
+        finder = FakeProvider(
+            [
+                _emit_findings_result(
+                    [_finder_finding("src/api/auth.py", "openrabbit/correctness/x", 90, "correctness")]
+                ),
+                _emit_findings_result(
+                    [_finder_finding("src/api/auth.py", "openrabbit/security/sqli", 90, "security")]
+                ),
+            ]
+        )
+        verifier = FakeProvider(
+            [_verify_batch_result([(0, True, 0.95), (1, True, 0.92)])]
+        )
+        result = orch_mod.review(
+            config,
+            pr_context={
+                "draft": False,
+                "state": "open",
+                "head_sha": "abc",
+                "repo": "acme/repo",
+                "number": 7,
+                "diff": SAMPLE_DIFF,
+            },
+            providers={"finder": finder, "verifier": verifier},
+        )
+        # finder: 2*(100 in, 50 out); verifier: 1*(80 in, 20 out).
+        assert result.usage == Usage(input_tokens=280, output_tokens=120)
+        cost = result.cost_summary
+        assert cost is not None
+        assert cost.input_tokens == 280
+        assert cost.output_tokens == 120
+        # 3 model calls total (2 finder + 1 verifier).
+        assert cost.calls == 3
+
+    def test_cost_summary_zero_when_no_model_calls(self, config):
+        # A gate skip means zero model calls -> a zeroed cost summary.
+        finder = FakeProvider([])
+        verifier = FakeProvider([])
+        result = orch_mod.review(
+            config,
+            pr_context={
+                "draft": True,
+                "state": "open",
+                "head_sha": "abc",
+                "diff": SAMPLE_DIFF,
+            },
+            providers={"finder": finder, "verifier": verifier},
+        )
+        assert result.reviewed is False
+        assert result.cost_summary.input_tokens == 0
+        assert result.cost_summary.calls == 0
+
+    def test_cost_summary_has_dollar_estimate_for_priced_finder(self, config):
+        # The finder model (amazon.nova-pro) is priced, so a $ estimate appears.
+        finder = FakeProvider(
+            [_emit_findings_result([]), _emit_findings_result([])]
+        )
+        verifier = FakeProvider([])
+        result = orch_mod.review(
+            config,
+            pr_context={
+                "draft": False,
+                "state": "open",
+                "head_sha": "abc",
+                "diff": SAMPLE_DIFF,
+            },
+            providers={"finder": finder, "verifier": verifier},
+        )
+        # Finder is amazon.nova-pro-v1:0 in the config -> priced.
+        assert result.cost_summary.usd_estimate is not None
+
+
+# --------------------------------------------------------------------------- #
+# usage-recording provider wrapper                                             #
+# --------------------------------------------------------------------------- #
+class TestUsageRecordingProvider:
+    def test_passes_through_identity_and_accumulates_usage(self):
+        from openrabbit.domain import Usage
+
+        inner = FakeProvider(
+            [
+                _emit_findings_result([]),  # Usage(input=100, output=50)
+                _emit_findings_result([]),
+            ],
+            name="nova",
+            model="amazon.nova-pro-v1:0",
+        )
+        wrapper = orch_mod._UsageRecordingProvider(inner)
+        # Identity passes through.
+        assert wrapper.name == "nova"
+        assert wrapper.model == "amazon.nova-pro-v1:0"
+        # Forwards complete() and accumulates Usage + a call count.
+        plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["security"])
+        pf = next(f for f in plan.files if f.path == "src/api/auth.py")
+        run_lenses_mod.run_lens(wrapper, pf, "security", "SEC", prefix="P")
+        run_lenses_mod.run_lens(wrapper, pf, "security", "SEC", prefix="P")
+        assert wrapper.call_count == 2
+        assert wrapper.total_usage == Usage(input_tokens=200, output_tokens=100)
 
 
 # --------------------------------------------------------------------------- #
@@ -816,6 +1164,27 @@ class TestCliOffline:
         with pytest.raises(SystemExit):
             cli.main(["review", "--offline"])
 
+    def test_offline_output_includes_cost_summary(self, tmp_path, capsys):
+        # The per-PR cost telemetry (SPEC 7.3) is surfaced in the JSON output
+        # and logged to stderr.
+        from openrabbit import cli
+
+        diff_path = tmp_path / "pr.diff"
+        diff_path.write_text(SAMPLE_DIFF, encoding="utf-8")
+        rc = cli.main(
+            ["review", "--offline", "--diff", str(diff_path), "--fixtures", "demo"]
+        )
+        assert rc == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        cost = payload["cost"]
+        # The cost block carries the four token totals + a call count.
+        for key in ("inputTokens", "outputTokens", "cacheRead", "cacheWrite", "calls"):
+            assert key in cost
+        assert "usdEstimate" in cost
+        # The cost line is logged to stderr (CI visibility).
+        assert "openrabbit cost:" in captured.err
+
 
 # --------------------------------------------------------------------------- #
 # CLI online mode (fake GitHub client + monkeypatched providers)              #
@@ -906,7 +1275,9 @@ class TestCliOnline:
                 ),
             ]
         )
-        verifier = FakeProvider([_verify_result(0.9), _verify_result(0.9)])
+        verifier = FakeProvider(
+            [_verify_batch_result([(0, True, 0.9), (1, True, 0.9)])]
+        )
         monkeypatch.setattr(
             "openrabbit.pipeline.orchestrator.build_providers",
             lambda cfg: {"finder": finder, "verifier": verifier},
@@ -980,7 +1351,9 @@ class TestCliOnline:
                 ),
             ]
         )
-        verifier = FakeProvider([_verify_result(0.10), _verify_result(0.20)])
+        verifier = FakeProvider(
+            [_verify_batch_result([(0, True, 0.10), (1, True, 0.20)])]
+        )
         monkeypatch.setattr(
             "openrabbit.pipeline.orchestrator.build_providers",
             lambda cfg: {"finder": finder, "verifier": verifier},
@@ -1342,14 +1715,10 @@ class TestContextEnclosing:
 # --------------------------------------------------------------------------- #
 class TestVerifyEdges:
     def _finding(self):
-        fp = compute_fingerprint("src/api/auth.py", "r", "ctx")
-        return Finding(
-            file="src/api/auth.py", start_line=1, end_line=1, side="RIGHT",
-            severity="high", category="security", confidence=0.9, title="t",
-            body="b", rule_id="r", fingerprint=fp,
-        )
+        return _finding(0.9, rule="r")
 
     def test_missing_tool_call_drops(self):
+        # No batch verdict array at all -> every verified finding drops.
         result = CompletionResult(
             text="no tool", tool_calls=[], finish_reason=FinishReason.STOP, usage=Usage()
         )
@@ -1357,10 +1726,18 @@ class TestVerifyEdges:
         assert verify_mod.verify_findings(verifier, [self._finding()], gate=0.8) == []
 
     def test_non_numeric_confidence_drops(self):
+        # A verdict whose confidence is non-numeric drops that finding.
         result = CompletionResult(
             text="",
-            tool_calls=[ToolCall(id="v", name="verify_finding", args={"keep": True, "confidence": "x"})],
-            finish_reason=FinishReason.TOOL_USE, usage=Usage(),
+            tool_calls=[
+                ToolCall(
+                    id="v",
+                    name="verify_findings",
+                    args={"verdicts": [{"id": 0, "keep": True, "confidence": "x"}]},
+                )
+            ],
+            finish_reason=FinishReason.TOOL_USE,
+            usage=Usage(),
         )
         verifier = FakeProvider([result])
         assert verify_mod.verify_findings(verifier, [self._finding()], gate=0.8) == []
@@ -1373,6 +1750,50 @@ class TestVerifyEdges:
         )
         msg = verifier.calls[0].messages[0]
         assert "HIGH-RISK" in msg.content
+
+    def _batch_tool(self, verdicts) -> CompletionResult:
+        return CompletionResult(
+            text="",
+            tool_calls=[
+                ToolCall(id="v", name="verify_findings", args={"verdicts": verdicts})
+            ],
+            finish_reason=FinishReason.TOOL_USE,
+            usage=Usage(),
+        )
+
+    def test_verdicts_not_a_list_drops_all(self):
+        # Malformed model output: 'verdicts' isn't an array -> every finding drops.
+        result = CompletionResult(
+            text="",
+            tool_calls=[
+                ToolCall(id="v", name="verify_findings", args={"verdicts": "nope"})
+            ],
+            finish_reason=FinishReason.TOOL_USE,
+            usage=Usage(),
+        )
+        verifier = FakeProvider([result])
+        assert verify_mod.verify_findings(verifier, [self._finding()], gate=0.8) == []
+
+    def test_non_dict_verdict_item_skipped(self):
+        verifier = FakeProvider([self._batch_tool(["not-a-dict"])])
+        assert verify_mod.verify_findings(verifier, [self._finding()], gate=0.8) == []
+
+    def test_verdict_missing_keep_skipped(self):
+        verifier = FakeProvider([self._batch_tool([{"id": 0, "confidence": 0.95}])])
+        assert verify_mod.verify_findings(verifier, [self._finding()], gate=0.8) == []
+
+    def test_verdict_bad_id_skipped(self):
+        verifier = FakeProvider(
+            [self._batch_tool([{"id": "x", "keep": True, "confidence": 0.95}])]
+        )
+        assert verify_mod.verify_findings(verifier, [self._finding()], gate=0.8) == []
+
+    def test_max_tokens_override_passed_through(self):
+        verifier = FakeProvider([_verify_result(0.95)])
+        verify_mod.verify_findings(
+            verifier, [self._finding()], gate=0.8, max_tokens=999
+        )
+        assert verifier.calls[0].max_tokens == 999
 
 
 # --------------------------------------------------------------------------- #

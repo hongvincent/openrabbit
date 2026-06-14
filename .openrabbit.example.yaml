@@ -5,6 +5,10 @@ version: 1
 review:
   profile: balanced            # chill | balanced | assertive
   confidence_gate: 0.80        # drop findings below this calibrated confidence
+  verify_min_severity: high    # route only >= this severity through the (expensive,
+                               # cross-family) verifier; lesser findings use the
+                               # cheaper finder-confidence + gate path
+                               # (critical | high | medium | low | nit)
   incremental: true            # review diff since last_reviewed_sha when available
   path_filters:
     - "!**/dist/**"
