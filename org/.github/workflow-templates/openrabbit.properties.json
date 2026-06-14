@@ -1,0 +1,13 @@
+{
+  "name": "openrabbit AI code review",
+  "description": "High-trust, low-noise AI code review on every pull request. Calls openrabbit's central reusable workflow (Bedrock via keyless OIDC); advisory-only and SHA-pinned. One central bump rolls the fleet forward.",
+  "iconName": "octicon shield-check",
+  "categories": [
+    "Code review",
+    "Code Quality",
+    "Security"
+  ],
+  "filePatterns": [
+    ".openrabbit.ya?ml$"
+  ]
+}

@@ -80,12 +80,20 @@ runs:
 
     - name: Run openrabbit review
       shell: bash
+      # GitHub-hardening: never inline ${{ }} into a run script. Pass every value
+      # through env: and reference it as a QUOTED shell var so a future caller
+      # that wires free-text into config/commit cannot inject commands (the
+      # runner holds the OIDC/Bedrock role — runner RCE would be material).
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        OR_REPO: ${{ github.repository }}
+        OR_PR: ${{ inputs.pr }}
+        OR_COMMIT: ${{ inputs.commit }}
+        OR_CONFIG: ${{ inputs.config }}
       run: >-
         uv run openrabbit review
-        --repo ${{ github.repository }}
-        --pr ${{ inputs.pr }}
-        --commit ${{ inputs.commit }}
-        --config ${{ inputs.config }}
+        --repo "$OR_REPO"
+        --pr "$OR_PR"
+        --commit "$OR_COMMIT"
+        --config "$OR_CONFIG"
         --post

@@ -1,0 +1,22 @@
+{
+  "name": "openrabbit-marketplace",
+  "owner": {
+    "name": "openrabbit",
+    "email": "hongvincent@users.noreply.github.com"
+  },
+  "metadata": {
+    "description": "Private marketplace for openrabbit's portable AI code-review skills.",
+    "version": "0.0.0"
+  },
+  "plugins": [
+    {
+      "name": "openrabbit",
+      "description": "High-trust, low-noise AI code review skills (review orchestrator + 5 lenses).",
+      "source": {
+        "source": "git",
+        "url": "https://github.com/hongvincent/openrabbit.git",
+        "ref": "v0.0.0"
+      }
+    }
+  ]
+}
