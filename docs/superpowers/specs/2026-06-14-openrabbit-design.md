@@ -231,7 +231,8 @@ openrabbit/
     lenses/{correctness,security,performance,tests}/SKILL.md
   plugin/.claude-plugin/{plugin.json, marketplace.json}
   eval/                        # golden-set builder, clean-PR controls, judge, scorecard
-  actions/                     # reusable-workflow.yml + composite action (SHA-pinned)
+  .github/workflows/           # reusable-workflow.yml (GitHub-required path for workflow_call)
+  actions/                     # composite action.yml (SHA-pinned)
   cli/gh-openrabbit/           # gh extension: init
   org/                         # .github templates, org ruleset, safe-settings
   docs/   README.md   LICENSE(Apache-2.0)   .openrabbit.yaml(example)

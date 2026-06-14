@@ -26,7 +26,13 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ACTIONS_DIR = REPO_ROOT / "actions"
-REUSABLE_WORKFLOW = ACTIONS_DIR / "reusable-workflow.yml"
+# GitHub only resolves a reusable workflow invoked as
+# ``owner/repo/.github/workflows/<file>@<ref>`` when the file actually lives
+# under ``.github/workflows/`` — it cannot live in an arbitrary dir like
+# ``actions/``. So the reusable workflow lives here; the composite action (which
+# CAN live anywhere) stays under ``actions/``.
+WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
+REUSABLE_WORKFLOW = WORKFLOWS_DIR / "reusable-workflow.yml"
 COMPOSITE_ACTION = ACTIONS_DIR / "action.yml"
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -82,6 +88,41 @@ def reusable() -> dict[str, Any]:
 @pytest.fixture(scope="module")
 def composite() -> dict[str, Any]:
     return _load_yaml(COMPOSITE_ACTION)
+
+
+# --------------------------------------------------------------------------- #
+# reusable workflow lives at the only path GitHub accepts                      #
+# --------------------------------------------------------------------------- #
+def test_reusable_workflow_lives_under_github_workflows() -> None:
+    """A reusable workflow MUST live under ``.github/workflows/`` (the only path
+    GitHub resolves for ``owner/repo/.github/workflows/<file>@<ref>``)."""
+    assert REUSABLE_WORKFLOW.is_file(), (
+        f"reusable workflow must exist at {REUSABLE_WORKFLOW}"
+    )
+    assert REUSABLE_WORKFLOW.parent == WORKFLOWS_DIR
+    assert WORKFLOWS_DIR.name == "workflows"
+    assert WORKFLOWS_DIR.parent.name == ".github"
+    # It must NOT be left behind under actions/ (the path GitHub rejects).
+    assert not (ACTIONS_DIR / "reusable-workflow.yml").exists(), (
+        "reusable workflow must not live under actions/ (GitHub won't resolve it)"
+    )
+
+
+def test_onboarding_refs_point_at_existing_reusable_workflow_path() -> None:
+    """Every onboarding artifact references the reusable workflow at the
+    ``.github/workflows/`` path that actually exists on disk."""
+    rel = ".github/workflows/reusable-workflow.yml"
+    # The referenced path resolves to a real file.
+    assert (REPO_ROOT / rel).is_file()
+    # init.py's REUSABLE_WORKFLOW_REF and the org template both use that path.
+    from openrabbit.init import REUSABLE_WORKFLOW_REF
+
+    assert rel in REUSABLE_WORKFLOW_REF, (
+        f"init REUSABLE_WORKFLOW_REF must use {rel}: {REUSABLE_WORKFLOW_REF}"
+    )
+    template_text = (REPO_ROOT / "org" / ".github" / "workflow-templates"
+                     / "openrabbit.yml").read_text(encoding="utf-8")
+    assert rel in template_text, "org template must reference the .github/workflows/ path"
 
 
 # --------------------------------------------------------------------------- #

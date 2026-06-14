@@ -46,9 +46,9 @@ Each item = a dynamic workflow (TDD + adversarial review), then `uv run pytest`,
 - [ ] **iter3 review follow-ups (minor, from rate-limited fix agent):** ✅ HIGH+MED fence-escape prompt-injection FIXED inline (iter3.1, 5 regression tests). Remaining minor: cost USD prices verifier tokens at finder rate (orchestrator); CLI doesn't surface soft model_roles warnings; verify `_VERDICT_SCHEMA` lacks additionalProperties:false; unbounded learning text length; config dup verdict loop. → fold into cross-cutting hardening (item 18/19).
 
 ### Phase 3 — Onboarding & skillification
-11. [ ] `gh openrabbit init` (gh extension): detect stack → write `.openrabbit.yaml` + SHA-pinned caller workflow → OIDC trust → register secrets → marketplace+plugin enable
-12. [ ] `plugin/.claude-plugin/{plugin.json, marketplace.json}` (namespaced `openrabbit:review` plugin) for private marketplace distribution
-13. [ ] `org/` templates: `.github` org starter workflow-template + reusable workflow + org ruleset (SHA-pinned required check) + Safe-Settings example
+11. [x] `gh openrabbit init` — DONE (iter4): `openrabbit/init.py` (detect_stack + scaffold dry-run/write of `.openrabbit.yaml` + SHA-pinned caller workflow + OIDC wiring plan), `cli/gh-openrabbit/gh-openrabbit` (gh extension, `--apply`-guarded gh mutations), `openrabbit init` CLI subcommand
+12. [x] Claude Code plugin + marketplace — DONE (iter4): `plugin/.claude-plugin/{plugin.json,marketplace.json}` (namespaced openrabbit skills via `plugin/skills`→`../skills` symlink, git source pinned to ref), README
+13. [x] org rollout artifacts — DONE (iter4): `.github` starter workflow-template + reusable workflow (moved to `.github/workflows/`) + `org/ruleset.json` (required check) + `org/safe-settings.yml`. (adversarial review fixed 2 CRITICAL wiring bugs: plugin-skills field + reusable-workflow path)
 
 ### Phase 4 — Enterprise (optional, gated)
 14. [ ] SARIF output adapter (Security-tab tier, GHAS-gated) + Check-Run adapter (merge gating)

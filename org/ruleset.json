@@ -1,0 +1,73 @@
+{
+  "_comment": [
+    "openrabbit — organization ruleset (PRD §11 enforcement).",
+    "Requires the openrabbit review workflow/check to pass before a PR can merge",
+    "into the default branch of every targeted repo, governed CENTRALLY from the",
+    "org's .github repo — no per-repo branch-protection drift.",
+    "",
+    "ROLLOUT (SPEC §11): create this ruleset in 'evaluate' enforcement first so it",
+    "reports would-block decisions WITHOUT blocking any merge; once the eval run",
+    "shows the openrabbit check is green and stable across the fleet, flip",
+    "'enforcement' to 'active' to make it a hard merge gate.",
+    "",
+    "REQUIRED-CHECK CONTEXT (read carefully): for a reusable-workflow job,",
+    "GitHub reports the check-run name as '<caller job name> / <reusable job name>'.",
+    "Both onboarding paths name the caller job 'openrabbit' (the org starter",
+    "template sets `name: openrabbit`; the init-generated caller uses job id",
+    "'openrabbit' with no explicit name, which GitHub renders as 'openrabbit') and",
+    "the reusable workflow names its job 'review', so the EXACT reported context is",
+    "'openrabbit / review' — that is the string in required_status_checks below.",
+    "If you rename either job you MUST update this context (and safe-settings.yml).",
+    "",
+    "SHA-PIN (SPEC §12): 'required_status_checks.integration_id' optionally pins",
+    "the check to GitHub Actions. The reusable workflow itself is SHA-pinned in each",
+    "repo's caller (see workflow-templates/openrabbit.yml, which uses",
+    "'<OWNER>/openrabbit/.github/workflows/reusable-workflow.yml@<PINNED_SHA>').",
+    "Replace <OWNER>/<PINNED_SHA> with your org and the vetted openrabbit release",
+    "SHA; a single central bump of that SHA rolls every onboarded repo forward.",
+    "",
+    "Create via: gh api -X POST /orgs/<ORG>/rulesets --input org/ruleset.json"
+  ],
+  "name": "openrabbit required review",
+  "target": "branch",
+  "enforcement": "evaluate",
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    },
+    "repository_name": {
+      "include": ["~ALL"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "openrabbit / review",
+            "integration_id": 15368
+          }
+        ]
+      }
+    },
+    {
+      "type": "non_fast_forward"
+    }
+  ],
+  "bypass_actors": []
+}
