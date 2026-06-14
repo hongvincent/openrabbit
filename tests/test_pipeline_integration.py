@@ -929,6 +929,21 @@ class TestCliOnline:
         assert rc == 0
         # A review POST happened.
         assert any(u.endswith("/reviews") for u, _ in fake_client.posts)
+        # The enriched walkthrough actually ships to GitHub via the sticky
+        # comment: its body must carry the grouped changed-files table (not just
+        # the minimal summary), mirroring the offline orchestrator assertion so a
+        # regression dropping walkthrough_markdown on the CLI path is caught.
+        comment_bodies = [
+            (json or {}).get("body", "")
+            for u, json in fake_client.posts
+            if u.endswith("/comments")
+        ]
+        assert any("## Walkthrough" in b for b in comment_bodies)
+        assert any("### Changed files" in b for b in comment_bodies)
+        # Parity with the offline orchestrator: the shipped walkthrough carries
+        # the stats footer (and the count is labeled "reviewable files" so it
+        # never reads as contradicting the all-files changed-files table).
+        assert any("reviewable files:" in b for b in comment_bodies)
 
     def test_online_clean_pr_posts_no_review(self, monkeypatch, tmp_path):
         """When every finding is dropped (clean PR), no createReview POST fires —
@@ -1160,6 +1175,30 @@ class TestSummaryRendering:
     def test_summary_escapes_pipes(self):
         md = emit_mod.render_summary_markdown([self._finding(title="a | b")], stats={"files": 1})
         assert "a \\| b" in md
+
+    def test_summary_escapes_pipe_and_backtick_in_file_cell(self):
+        # f.file derives from the UNTRUSTED diff path; a pipe would break the
+        # table row and a backtick would close the code span. Both must be
+        # neutralized so a hostile path can't corrupt the rendered table.
+        f = self._finding()
+        f = Finding(
+            file="src/a|b`c.py",
+            start_line=f.start_line,
+            end_line=f.end_line,
+            side=f.side,
+            severity=f.severity,
+            category=f.category,
+            confidence=f.confidence,
+            title=f.title,
+            body=f.body,
+            rule_id=f.rule_id,
+            fingerprint=f.fingerprint,
+        )
+        md = emit_mod.render_summary_markdown([f], stats={"files": 1})
+        # Raw pipe/backtick must not survive verbatim in the file cell.
+        assert "a|b" not in md
+        assert "b`c" not in md
+        assert "a\\|b" in md
 
     def test_build_review_payload_event(self):
         payload = emit_mod.build_review_payload([self._finding()], "S", commit_sha="c")

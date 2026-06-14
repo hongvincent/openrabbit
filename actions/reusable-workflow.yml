@@ -1,0 +1,106 @@
+# openrabbit — reusable review workflow (PRD §11 control plane, §12 CI hardening).
+#
+# A thin caller workflow in each onboarded repo invokes this via `uses:` with
+# `workflow_call`. All review logic lives here so a single central SHA bump rolls
+# the whole fleet forward.
+#
+# Security posture (SPEC §12):
+#   * Top-level permissions are least-privilege `contents: read`.
+#   * `pull-requests: write` is elevated ONLY on the review job (to post the
+#     review) — never at the top level.
+#   * `id-token: write` enables GitHub OIDC -> STS `AssumeRoleWithWebIdentity`
+#     for KEYLESS Bedrock auth (no long-lived AWS keys).
+#   * Every third-party action is SHA-pinned to a 40-hex commit (with a trailing
+#     version comment) so the supply chain is immutable; bump via Dependabot.
+#   * The PR diff is untrusted data — openrabbit fences it and the reasoning
+#     layer holds no write credentials (advisory-only).
+name: openrabbit review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pr:
+        description: "Pull request number to review."
+        required: true
+        type: string
+      commit:
+        description: "Head commit SHA being reviewed."
+        required: true
+        type: string
+      config:
+        description: "Path to .openrabbit.yaml (model_roles, lenses, gates)."
+        required: false
+        type: string
+        default: ".openrabbit.yaml"
+      aws_region:
+        description: "Primary AWS region for OIDC/STS (verifier/model region)."
+        required: false
+        type: string
+        default: "us-east-2"
+      python_version:
+        description: "Python version used to run openrabbit."
+        required: false
+        type: string
+        default: "3.12"
+      runner:
+        description: "Runner label for the review job."
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      aws_role_arn:
+        description: "ARN of the IAM role to assume for Bedrock (OIDC trust)."
+        required: true
+
+# Least privilege by default; jobs elevate only what they need.
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: openrabbit review
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read          # read the checked-out code for enclosing context
+      pull-requests: write    # post the review (inline comments + walkthrough)
+      id-token: write         # OIDC -> STS AssumeRoleWithWebIdentity (keyless Bedrock)
+    steps:
+      # Fetch enough history that openrabbit can compute the incremental diff and
+      # read enclosing context. fetch-depth: 0 = full history (tuned for diff).
+      - name: Checkout PR head
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install openrabbit
+        # Runtime deps only (the `openrabbit` console script + base deps). Dev
+        # extras (pytest/coverage) are for CI test jobs, not the hardened review
+        # runner — keeping them out trims install time and supply-chain surface.
+        run: uv sync
+
+      # Keyless Bedrock auth: exchange the GitHub OIDC token for short-lived STS
+      # credentials by assuming the trust-pinned role. No static AWS secrets.
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b  # v6.2.0
+        with:
+          role-to-assume: ${{ secrets.aws_role_arn }}
+          aws-region: ${{ inputs.aws_region }}
+          role-session-name: openrabbit-review-${{ github.run_id }}
+
+      - name: Run openrabbit review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          uv run openrabbit review
+          --repo ${{ github.repository }}
+          --pr ${{ inputs.pr }}
+          --commit ${{ inputs.commit }}
+          --config ${{ inputs.config }}
+          --post

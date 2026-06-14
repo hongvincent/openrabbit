@@ -48,8 +48,12 @@ def render_summary_markdown(
     ]
     for f in findings:
         title = f.title.replace("|", "\\|")
+        # f.file derives from the UNTRUSTED diff path: a pipe would break the
+        # table row and a backtick would close the code span, so neutralize both
+        # before placing it in the `\`...\`` file cell.
+        file_cell = f.file.replace("|", "\\|").replace("`", "\\`")
         lines.append(
-            f"| {f.severity} | {f.category} | `{f.file}` | {f.start_line} | {title} |"
+            f"| {f.severity} | {f.category} | `{file_cell}` | {f.start_line} | {title} |"
         )
     return "\n".join(lines)
 
@@ -84,9 +88,19 @@ def emit_console(
     summary_markdown: str,
     commit_sha: Optional[str] = None,
     stats: Optional[Mapping[str, Any]] = None,
+    walkthrough_markdown: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Offline emit: return the would-be GitHub payload (no network)."""
-    return build_review_payload(findings, summary_markdown, commit_sha=commit_sha)
+    """Offline emit: return the would-be GitHub payload (no network).
+
+    ``walkthrough_markdown`` (the enriched
+    :func:`openrabbit.pipeline.walkthrough.build_walkthrough` body) overrides the
+    payload's ``sticky_walkthrough`` field when supplied; otherwise the minimal
+    ``summary_markdown`` is used (preserving the prior behavior).
+    """
+    payload = build_review_payload(findings, summary_markdown, commit_sha=commit_sha)
+    if walkthrough_markdown is not None:
+        payload["sticky_walkthrough"] = walkthrough_markdown
+    return payload
 
 
 def emit_github(

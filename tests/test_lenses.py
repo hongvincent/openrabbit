@@ -251,18 +251,104 @@ def test_load_lenses_ignores_top_level_files(tmp_path):
 # --------------------------------------------------------------------------- #
 # integration with the actual shipped lens skills                              #
 # --------------------------------------------------------------------------- #
+#: The five review lenses the harness ships (SPEC 6 step 4 / config LENSES).
+ALL_LENS_NAMES = (
+    "correctness",
+    "security",
+    "performance",
+    "tests",
+    "maintainability",
+)
+
+#: Lenses held to a stricter precision bar / explicit nit suppression (SPEC 3).
+STRICTER_PRECISION_LENSES = ("tests", "maintainability")
+
+
 def test_shipped_lenses_load_correctness_and_security():
     lenses = load_lenses(SKILLS_LENSES_DIR)
     assert "correctness" in lenses
     assert "security" in lenses
 
 
+def test_load_lenses_discovers_all_five_shipped_lenses():
+    """``load_lenses`` must find every shipped lens, not just the first two."""
+    lenses = load_lenses(SKILLS_LENSES_DIR)
+    assert set(ALL_LENS_NAMES) <= set(lenses), (
+        f"missing lenses: {set(ALL_LENS_NAMES) - set(lenses)}"
+    )
+    assert all(isinstance(v, Lens) for v in lenses.values())
+
+
 def test_shipped_lens_prompts_are_nonempty_and_report_all():
     lenses = load_lenses(SKILLS_LENSES_DIR)
-    for name in ("correctness", "security"):
+    for name in ALL_LENS_NAMES:
         lens = lenses[name]
         assert lens.system_prompt.strip(), f"{name} prompt empty"
         body = lens.system_prompt.lower()
         # The report-all contract (SPEC 3) and confidence/severity must appear.
         assert "confidence" in body
         assert "severity" in body
+
+
+def test_shipped_lenses_have_valid_frontmatter():
+    """Every shipped lens declares a matching name, a description, and tools."""
+    lenses = load_lenses(SKILLS_LENSES_DIR)
+    for name in ALL_LENS_NAMES:
+        lens = lenses[name]
+        # Frontmatter ``name`` keys the dict, so it must match.
+        assert lens.name == name
+        # Terse third-person trigger description present.
+        assert lens.description.strip(), f"{name} has no description"
+        # Least-privilege tool allowlist declared (non-empty for shipped lenses).
+        assert lens.allowed_tools, f"{name} declares no allowed-tools"
+
+
+def test_shipped_lenses_emit_findings_json_contract():
+    """Each lens body references the JSON findings output contract (SPEC 8.1)."""
+    lenses = load_lenses(SKILLS_LENSES_DIR)
+    for name in ALL_LENS_NAMES:
+        body = lenses[name].system_prompt.lower()
+        # Findings must be categorized and ruleId-namespaced per the contract.
+        assert "category" in body, f"{name} omits category"
+        assert "ruleid" in body, f"{name} omits ruleId"
+        # The contract output shape is JSON.
+        assert "json" in body, f"{name} omits the JSON contract reference"
+
+
+def test_stricter_precision_lenses_suppress_nits():
+    """tests/maintainability must hold a stricter precision / nit bar (SPEC 3)."""
+    lenses = load_lenses(SKILLS_LENSES_DIR)
+    for name in STRICTER_PRECISION_LENSES:
+        body = lenses[name].system_prompt.lower()
+        assert "nit" in body, f"{name} must address nit suppression / precision"
+
+
+# --------------------------------------------------------------------------- #
+# config-driven lens selection (route consumes config.review.lenses)           #
+# --------------------------------------------------------------------------- #
+def test_route_selects_lenses_from_configured_set():
+    """A configured lens set drives which lenses route assigns to a file.
+
+    ``route_diff`` is the single place that turns ``config.review.lenses`` into
+    per-file lens assignments; it must honour the configured set, not a
+    hardcoded pair.
+    """
+    from openrabbit.pipeline.route import route_diff
+
+    diff = (
+        "diff --git a/src/widget.py b/src/widget.py\n"
+        "--- a/src/widget.py\n"
+        "+++ b/src/widget.py\n"
+        "@@ -1,2 +1,3 @@\n"
+        " def f():\n"
+        "+    return 1\n"
+    )
+
+    plan = route_diff(diff, lenses=list(ALL_LENS_NAMES))
+    code_file = plan.files[0]
+    # A plain code file gets every configured lens.
+    assert set(code_file.lenses) == set(ALL_LENS_NAMES)
+
+    # Narrowing the config narrows the assigned lenses (config-driven, not fixed).
+    narrowed = route_diff(diff, lenses=["performance", "tests"])
+    assert set(narrowed.files[0].lenses) == {"performance", "tests"}
