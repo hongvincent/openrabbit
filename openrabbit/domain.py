@@ -85,7 +85,7 @@ class Usage:
     cache_read: int = 0
     cache_write: int = 0
 
-    def __add__(self, other: "Usage") -> "Usage":
+    def __add__(self, other: Usage) -> Usage:
         if not isinstance(other, Usage):
             return NotImplemented
         return Usage(

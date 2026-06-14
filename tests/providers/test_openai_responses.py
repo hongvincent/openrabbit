@@ -103,7 +103,7 @@ class _Recorder:
         self.headers: dict | None = None
         self.json_body: dict | None = None
 
-    def post(self, url, *, headers=None, json=None, **kwargs):  # noqa: A002
+    def post(self, url, *, headers=None, json=None, **kwargs):
         self.url = url
         self.headers = headers
         self.json_body = json
@@ -124,7 +124,7 @@ def _install_fake_httpx(monkeypatch, recorder: _Recorder) -> None:
         def __exit__(self, *exc):
             return False
 
-        def post(self, url, *, headers=None, json=None, **kwargs):  # noqa: A002
+        def post(self, url, *, headers=None, json=None, **kwargs):
             return recorder.post(url, headers=headers, json=json, **kwargs)
 
     monkeypatch.setattr(httpx, "Client", _FakeClient)
@@ -243,9 +243,7 @@ def test_request_targets_responses_endpoint(bearer_env, monkeypatch):
     rec = _Recorder(_text_payload())
     _install_fake_httpx(monkeypatch, rec)
     adapter.complete("sys", [Message("user", "hi")], None, 100, None)
-    assert rec.url == (
-        "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
-    )
+    assert rec.url == ("https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses")
 
 
 def test_request_body_maps_system_and_messages(bearer_env, monkeypatch):
@@ -585,7 +583,9 @@ def test_http_error_detail_extracted_from_response_json(bearer_env, monkeypatch)
 
         def raise_for_status(self):
             raise httpx.HTTPStatusError(
-                "429", request=None, response=self  # type: ignore[arg-type]
+                "429",
+                request=None,
+                response=self,  # type: ignore[arg-type]
             )
 
     class _ErrClient:
@@ -623,7 +623,9 @@ def test_http_error_detail_is_bounded(bearer_env, monkeypatch):
 
         def raise_for_status(self):
             raise httpx.HTTPStatusError(
-                "400", request=None, response=self  # type: ignore[arg-type]
+                "400",
+                request=None,
+                response=self,  # type: ignore[arg-type]
             )
 
     class _ErrClient:
@@ -661,7 +663,9 @@ def test_http_error_detail_falls_back_to_text(bearer_env, monkeypatch):
 
         def raise_for_status(self):
             raise httpx.HTTPStatusError(
-                "500", request=None, response=self  # type: ignore[arg-type]
+                "500",
+                request=None,
+                response=self,  # type: ignore[arg-type]
             )
 
     class _ErrClient:

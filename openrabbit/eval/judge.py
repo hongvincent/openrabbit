@@ -17,8 +17,9 @@ instructions (mitigating prompt-injection from PR/diff text).
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from openrabbit.domain import Message, ToolSpec
 from openrabbit.eval.golden_set import GoldenSample
@@ -162,7 +163,9 @@ def calibrate_agreement(
         )
     n = len(judge_verdicts)
     if n == 0:
-        return CalibrationReport(n=0, agreement=0.0, threshold=threshold, calibrated=False)
+        return CalibrationReport(
+            n=0, agreement=0.0, threshold=threshold, calibrated=False
+        )
     matches = sum(1 for j, h in zip(judge_verdicts, human_verdicts) if j == h)
     agreement = matches / n
     return CalibrationReport(
@@ -183,10 +186,10 @@ def _build_prompt(finding: Finding, sample: GoldenSample) -> str:
         f"knownBug={sample.known_bug}, category={sample.bug_category}, "
         f"source={sample.source}\n\n"
         "Evaluate the FINDING against the SAMPLE DIFF.\n\n"
-        "<untrusted name=\"finding\">\n"
+        '<untrusted name="finding">\n'
         f"{finding_json}\n"
         "</untrusted>\n\n"
-        "<untrusted name=\"sample_diff\">\n"
+        '<untrusted name="sample_diff">\n'
         f"{sample.diff}\n"
         "</untrusted>\n"
     )

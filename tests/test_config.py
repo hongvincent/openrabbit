@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 from openrabbit.config import (
-    ConfigError,
     Config,
+    ConfigError,
     ExternalTools,
     ModelRole,
     ReviewConfig,
@@ -227,7 +227,11 @@ def test_path_instruction_missing_fields_rejected():
 # --------------------------------------------------------------------------- #
 def test_gpt_verifier_in_us_east_2_loads_clean():
     cfg = load_config(
-        {"model_roles": {"verifier": {"model": "openai.gpt-5.5", "region": "us-east-2"}}}
+        {
+            "model_roles": {
+                "verifier": {"model": "openai.gpt-5.5", "region": "us-east-2"}
+            }
+        }
     )
     assert cfg.model_roles["verifier"].region == "us-east-2"
     # no hard errors, no warnings for an in-allow-list GPT-5.5
@@ -264,7 +268,11 @@ def test_gpt_verifier_via_profile_in_seoul_is_config_error():
 
 def test_nova_finder_in_seoul_loads_clean():
     cfg = load_config(
-        {"model_roles": {"finder": {"model": "amazon.nova-pro-v1:0", "region": "ap-northeast-2"}}}
+        {
+            "model_roles": {
+                "finder": {"model": "amazon.nova-pro-v1:0", "region": "ap-northeast-2"}
+            }
+        }
     )
     assert validate_model_roles(cfg) == []
 
@@ -272,7 +280,14 @@ def test_nova_finder_in_seoul_loads_clean():
 def test_unknown_model_id_is_warning_not_error():
     # An unknown model must NOT block load_config (soft), but should warn.
     cfg = load_config(
-        {"model_roles": {"finder": {"model": "amazon.titan-imaginary-v9:0", "region": "us-east-1"}}}
+        {
+            "model_roles": {
+                "finder": {
+                    "model": "amazon.titan-imaginary-v9:0",
+                    "region": "us-east-1",
+                }
+            }
+        }
     )
     warnings = validate_model_roles(cfg)
     assert len(warnings) == 1
@@ -282,7 +297,11 @@ def test_unknown_model_id_is_warning_not_error():
 
 def test_nova_off_allowlist_region_is_warning_not_error():
     cfg = load_config(
-        {"model_roles": {"finder": {"model": "amazon.nova-pro-v1:0", "region": "eu-west-3"}}}
+        {
+            "model_roles": {
+                "finder": {"model": "amazon.nova-pro-v1:0", "region": "eu-west-3"}
+            }
+        }
     )
     warnings = validate_model_roles(cfg)
     assert len(warnings) == 1
@@ -333,7 +352,11 @@ def test_packaged_example_has_no_model_role_warnings():
 def test_load_config_collect_warnings_surfaces_soft_issues():
     # load_config can return soft warnings to the caller without raising.
     cfg, warnings = load_config(
-        {"model_roles": {"finder": {"model": "amazon.nova-pro-v1:0", "region": "eu-west-3"}}},
+        {
+            "model_roles": {
+                "finder": {"model": "amazon.nova-pro-v1:0", "region": "eu-west-3"}
+            }
+        },
         collect_warnings=True,
     )
     assert isinstance(cfg, Config)
@@ -344,6 +367,10 @@ def test_load_config_collect_warnings_surfaces_soft_issues():
 def test_load_config_collect_warnings_still_raises_hard_errors():
     with pytest.raises(ConfigError):
         load_config(
-            {"model_roles": {"verifier": {"model": "openai.gpt-5.5", "region": "ap-northeast-2"}}},
+            {
+                "model_roles": {
+                    "verifier": {"model": "openai.gpt-5.5", "region": "ap-northeast-2"}
+                }
+            },
             collect_warnings=True,
         )

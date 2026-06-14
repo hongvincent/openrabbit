@@ -62,8 +62,14 @@ class FakeResponse:
 
 
 class RecordedRequest:
-    def __init__(self, method: str, url: str, *, json: Any = None,
-                 headers: Optional[dict[str, str]] = None) -> None:
+    def __init__(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: Any = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> None:
         self.method = method
         self.url = url
         self.json = json
@@ -77,8 +83,7 @@ class FakeClient:
 
     def _handle(self, method: str, url: str, **kw: Any) -> FakeResponse:
         self.requests.append(
-            RecordedRequest(method, url, json=kw.get("json"),
-                            headers=kw.get("headers"))
+            RecordedRequest(method, url, json=kw.get("json"), headers=kw.get("headers"))
         )
         for m, substr, resp in self.routes:
             if m == method and substr in url:
@@ -254,8 +259,9 @@ def test_post_check_run_passes_gate_through():
     client = FakeClient([("POST", "/repos/acme/widget/check-runs", resp)])
     adapter = make_adapter(client)
 
-    post_check_run(adapter, [make_finding(severity="critical")],
-                   head_sha="abc", gate="high")
+    post_check_run(
+        adapter, [make_finding(severity="critical")], head_sha="abc", gate="high"
+    )
 
     body = [r for r in client.requests if r.method == "POST"][0].json
     assert body["conclusion"] == "failure"
@@ -273,15 +279,16 @@ def test_post_check_run_chunks_annotations_over_50(monkeypatch):
     """GitHub caps annotations at 50 per Check-Run request; the adapter must
     create with the first 50 then PATCH the rest in batches of <=50."""
     findings = [
-        make_finding(file=f"src/f{i}.py", fingerprint=f"fp{i}")
-        for i in range(120)
+        make_finding(file=f"src/f{i}.py", fingerprint=f"fp{i}") for i in range(120)
     ]
     create = FakeResponse(201, {"id": 4242, "conclusion": "neutral"})
     patch = FakeResponse(200, {"id": 4242})
-    client = FakeClient([
-        ("POST", "/repos/acme/widget/check-runs", create),
-        ("PATCH", "/repos/acme/widget/check-runs/4242", patch),
-    ])
+    client = FakeClient(
+        [
+            ("POST", "/repos/acme/widget/check-runs", create),
+            ("PATCH", "/repos/acme/widget/check-runs/4242", patch),
+        ]
+    )
     adapter = make_adapter(client)
 
     post_check_run(adapter, findings, head_sha="abc")

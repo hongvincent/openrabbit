@@ -101,6 +101,46 @@ def test_get_in_scope_empty_when_no_learnings(store):
 
 
 # --------------------------------------------------------------------------- #
+# learning text length bound (item 4)                                          #
+# --------------------------------------------------------------------------- #
+def test_add_learning_truncates_overlong_text(store):
+    # One oversized learning must not bloat/poison the byte-stable cached prefix:
+    # add_learning caps the stored text to MAX_LEARNING_TEXT_CHARS.
+    from openrabbit.learnings import MAX_LEARNING_TEXT_CHARS
+
+    huge = "x" * (MAX_LEARNING_TEXT_CHARS + 5000)
+    learning = store.add_learning(
+        scope="acme/widgets",
+        text=huge,
+        provenance={"pr": 1, "file": "x.py", "user": "u"},
+        category="maintainability",
+    )
+    assert len(learning.text) == MAX_LEARNING_TEXT_CHARS
+    # The cap is persisted, not just on the returned object.
+    reloaded = store.get_in_scope_learnings("acme/widgets", ["x.py"])
+    assert len(reloaded) == 1
+    assert len(reloaded[0].text) == MAX_LEARNING_TEXT_CHARS
+
+
+def test_add_learning_keeps_short_text_verbatim(store):
+    text = "Always parameterize SQL."
+    learning = store.add_learning(
+        scope="acme/widgets",
+        text=text,
+        provenance={"pr": 1, "file": "x.py", "user": "u"},
+        category="security",
+    )
+    assert learning.text == text
+
+
+def test_max_learning_text_chars_is_sane(store):
+    # The cap is a sane, bounded value (a couple thousand chars), not unbounded.
+    from openrabbit.learnings import MAX_LEARNING_TEXT_CHARS
+
+    assert 0 < MAX_LEARNING_TEXT_CHARS <= 4000
+
+
+# --------------------------------------------------------------------------- #
 # scope filtering: repo vs org                                                 #
 # --------------------------------------------------------------------------- #
 def test_scope_filtering_repo_vs_org(store):
@@ -120,8 +160,13 @@ def test_scope_filtering_repo_vs_org(store):
     )
 
     # The widgets repo sees BOTH the org learning and its own.
-    widgets = {ln.text for ln in store.get_in_scope_learnings("acme/widgets", ["net.py"])}
-    assert widgets == {"Org rule: log no PII.", "Widgets repo: use the shared retry helper."}
+    widgets = {
+        ln.text for ln in store.get_in_scope_learnings("acme/widgets", ["net.py"])
+    }
+    assert widgets == {
+        "Org rule: log no PII.",
+        "Widgets repo: use the shared retry helper.",
+    }
 
     # A different repo in the same org sees only the org learning.
     gadgets = {ln.text for ln in store.get_in_scope_learnings("acme/gadgets", ["a.py"])}
@@ -245,9 +290,7 @@ def test_build_prefix_without_learnings_is_unchanged():
 
 def test_build_prefix_learnings_fenced_as_untrusted():
     config = load_config({"version": 1})
-    prefix = ctx.build_prefix(
-        config, {}, learnings=["Use the shared logger."]
-    )
+    prefix = ctx.build_prefix(config, {}, learnings=["Use the shared logger."])
     # Team learnings are still data, not instructions: fenced like other context.
     assert "Use the shared logger." in prefix
     assert "learnings" in prefix.lower()
@@ -273,7 +316,9 @@ index 1111111..2222222 100644
 def _finder_emit(findings: list[dict]) -> CompletionResult:
     return CompletionResult(
         text="",
-        tool_calls=[ToolCall(id="c1", name="emit_findings", args={"findings": findings})],
+        tool_calls=[
+            ToolCall(id="c1", name="emit_findings", args={"findings": findings})
+        ],
         finish_reason=FinishReason.TOOL_USE,
         usage=Usage(),
     )
@@ -289,7 +334,12 @@ def _verify_keep(confidence: float) -> CompletionResult:
                 name="verify_findings",
                 args={
                     "verdicts": [
-                        {"id": 0, "keep": True, "confidence": confidence, "rationale": "ok"}
+                        {
+                            "id": 0,
+                            "keep": True,
+                            "confidence": confidence,
+                            "rationale": "ok",
+                        }
                     ]
                 },
             )
@@ -510,7 +560,9 @@ def test_cli_learn_records_learning(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["recorded"] == "learning"
     # The learning is now in scope for the repo.
-    learnings = LearningsStore(store_path).get_in_scope_learnings("acme/widgets", ["x.py"])
+    learnings = LearningsStore(store_path).get_in_scope_learnings(
+        "acme/widgets", ["x.py"]
+    )
     assert any("shared retry helper" in ln.text for ln in learnings)
 
 

@@ -1,0 +1,70 @@
+# openrabbit — self CI (PRD §12 "CI hardening" / checklist item 19).
+#
+# Lint + format + test gate for openrabbit *itself* (not the reusable review
+# workflow). Runs on every PR and on pushes to the default branch.
+#
+# What it enforces:
+#   * `ruff check`           — lint the codebase (no new lint regressions).
+#   * `ruff format --check`  — the tree is already formatter-clean.
+#   * `pytest --cov-fail-under=95` — tests pass AND coverage stays ≥ 95%.
+#
+# Security posture (SPEC §12):
+#   * Top-level `permissions: contents: read` (least privilege; this workflow
+#     only reads the checked-out code and never writes back).
+#   * Every third-party action is SHA-pinned to a 40-hex commit (trailing version
+#     comment); Dependabot bumps the pins (see .github/dependabot.yml).
+#   * No secrets, no network egress beyond the dependency install — unit tests
+#     are fully offline (FakeProvider / mocks; cloud SDKs lazy-imported).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: this workflow only reads the repo (no comments, no commits).
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: lint + test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      # Run the whole matrix even if one Python version fails, so we see all.
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          # Cache the uv download/dependency layer for faster CI.
+          enable-cache: true
+
+      - name: Install (dev extra)
+        run: uv sync --extra dev
+
+      - name: Lint (ruff check)
+        run: uv run --extra dev ruff check .
+
+      - name: Format check (ruff format --check)
+        run: uv run --extra dev ruff format --check .
+
+      - name: Test + coverage gate (>= 95%)
+        # The coverage source (--cov=openrabbit) comes from pyproject addopts;
+        # --cov-fail-under=95 FAILS the build if total coverage drops below 95%.
+        run: uv run --extra dev pytest -q --cov-fail-under=95

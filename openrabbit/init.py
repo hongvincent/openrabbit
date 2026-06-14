@@ -102,9 +102,12 @@ def detect_stack(repo_path: PathLike) -> DetectedStack:
     frameworks: list[str] = []
     external_tools: list[str] = []
 
-    has_python = (root / "pyproject.toml").is_file() or (
-        root / "requirements.txt"
-    ).is_file() or (root / "setup.py").is_file() or (root / "setup.cfg").is_file()
+    has_python = (
+        (root / "pyproject.toml").is_file()
+        or (root / "requirements.txt").is_file()
+        or (root / "setup.py").is_file()
+        or (root / "setup.cfg").is_file()
+    )
     has_node = (root / "package.json").is_file()
     has_go = (root / "go.mod").is_file()
 
@@ -278,13 +281,13 @@ def scaffold(
     stack = detect_stack(root)
 
     config_yaml = _render_config_yaml(stack)
-    workflow_yaml = _render_caller_workflow(reusable_ref=reusable_ref, aws_region=aws_region)
+    workflow_yaml = _render_caller_workflow(
+        reusable_ref=reusable_ref, aws_region=aws_region
+    )
 
     files = [
         PlannedFile(path=".openrabbit.yaml", content=config_yaml),
-        PlannedFile(
-            path=".github/workflows/openrabbit.yml", content=workflow_yaml
-        ),
+        PlannedFile(path=".github/workflows/openrabbit.yml", content=workflow_yaml),
     ]
     wiring = _render_wiring_plan(aws_region=aws_region)
 

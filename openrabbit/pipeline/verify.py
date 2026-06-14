@@ -67,8 +67,13 @@ _SYSTEM_PROMPT = (
     "Respond ONLY via the `verify_findings` tool."
 )
 
+# ``additionalProperties: false`` matches the findings/judge contracts: the
+# model must emit ONLY the declared keys, so a stray/injected field (from
+# untrusted finding text steering the verifier) can't smuggle extra data through
+# the structured-output channel.
 _VERDICT_SCHEMA: dict[str, Any] = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "id": {"type": "integer", "minimum": 0},
         "keep": {"type": "boolean"},
@@ -80,6 +85,7 @@ _VERDICT_SCHEMA: dict[str, Any] = {
 
 _VERIFY_SCHEMA: dict[str, Any] = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "verdicts": {
             "type": "array",
@@ -120,9 +126,7 @@ def _batch_max_tokens(n: int) -> int:
 
 def _build_prompt(findings: list[Finding], high_risk: bool) -> str:
     """Build the batched verifier prompt; each finding carries a stable id."""
-    payload = [
-        {"id": i, "finding": f.to_dict()} for i, f in enumerate(findings)
-    ]
+    payload = [{"id": i, "finding": f.to_dict()} for i, f in enumerate(findings)]
     from openrabbit.pipeline.context import neutralize_untrusted_fence
 
     # Findings carry untrusted title/body/suggestion text; json.dumps does not
@@ -143,7 +147,7 @@ def _build_prompt(findings: list[Finding], high_risk: bool) -> str:
         "speculative, or not supported by the diff. Emit exactly one verdict per "
         "finding, referencing its `id`.\n"
         f"{recall}"
-        "<untrusted name=\"findings\">\n"
+        '<untrusted name="findings">\n'
         f"{findings_json}\n"
         "</untrusted>\n"
     )
@@ -233,7 +237,9 @@ def verify_findings(
     verified_kept: dict[int, Finding] = {}
     if to_verify:
         high_risk = any(f.file in high_risk_files for f in to_verify)
-        budget = max_tokens if max_tokens is not None else _batch_max_tokens(len(to_verify))
+        budget = (
+            max_tokens if max_tokens is not None else _batch_max_tokens(len(to_verify))
+        )
         user = Message(role="user", content=_build_prompt(to_verify, high_risk))
         result = verifier.complete(
             _SYSTEM_PROMPT,

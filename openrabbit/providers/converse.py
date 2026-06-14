@@ -131,9 +131,7 @@ class ConverseAdapter(Provider):
         if self._client is None:
             import boto3  # lazy: keeps module import AWS-free
 
-            self._client = boto3.client(
-                "bedrock-runtime", region_name=self._region
-            )
+            self._client = boto3.client("bedrock-runtime", region_name=self._region)
         return self._client
 
     # ------------------------------------------------------------------ #

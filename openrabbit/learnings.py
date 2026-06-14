@@ -35,14 +35,22 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Optional, Union
 
 from openrabbit.findings import Finding
 
 PathLike = Union[str, Path]
+
+# Maximum stored length (characters) of a single learning's text. Learnings are
+# injected verbatim into the byte-stable, cacheable system prefix (SPEC 6.3), so
+# one oversized learning could bloat that prefix (cost) or be used to poison /
+# steer the finder. Cap it to a sane bound on write; 2000 chars is generous for
+# a team convention while keeping the prefix small.
+MAX_LEARNING_TEXT_CHARS = 2000
 
 # Each recorded dismissal of a matching (rule_id, category, file) finding shape
 # multiplies the surviving confidence by this factor, so repeated dismissals
@@ -85,7 +93,7 @@ class Learning:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Learning":
+    def from_dict(cls, data: Mapping[str, Any]) -> Learning:
         """Build a :class:`Learning` from a stored dict (tolerant of missing keys)."""
         embedding = data.get("embedding")
         return cls(
@@ -172,13 +180,15 @@ class LearningsStore:
         """Add a learning under ``scope`` (a repo ``"owner/name"`` or org ``"owner"``).
 
         Returns the created :class:`Learning` (with a fresh id + UTC timestamp).
+        The text is capped to :data:`MAX_LEARNING_TEXT_CHARS` so one oversized
+        learning cannot bloat or poison the byte-stable cacheable prefix.
         """
         learning = Learning(
             id=uuid.uuid4().hex,
-            text=text,
+            text=text[:MAX_LEARNING_TEXT_CHARS],
             provenance=dict(provenance),
             category=category,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
             usage_count=0,
             embedding=None,
         )
@@ -272,5 +282,5 @@ class LearningsStore:
         count = self._dismissal_count(finding)
         if count <= 0:
             return finding.confidence
-        adjusted = finding.confidence * (penalty ** count)
+        adjusted = finding.confidence * (penalty**count)
         return max(MIN_ADJUSTED_CONFIDENCE, adjusted)

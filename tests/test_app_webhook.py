@@ -252,7 +252,9 @@ def test_handle_event_bad_json_string_ignored():
 def test_handle_event_non_object_json_ignored():
     spy = _SpyReview()
     # A JSON array / scalar is not a webhook object → ignore, don't crash.
-    assert handle_event("pull_request", "[1,2,3]", deps={"review": spy}).handled is False
+    assert (
+        handle_event("pull_request", "[1,2,3]", deps={"review": spy}).handled is False
+    )
     assert handle_event("pull_request", "42", deps={"review": spy}).handled is False
     assert spy.contexts == []
 

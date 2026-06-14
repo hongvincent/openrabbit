@@ -13,8 +13,9 @@ is pure stdlib — no git, no network.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from openrabbit.eval.golden_set import GoldenSample
 
@@ -41,7 +42,7 @@ class ControlSample(GoldenSample):
         return data
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ControlSample":
+    def from_dict(cls, data: dict[str, Any]) -> ControlSample:
         return cls(
             sample_id=data["sampleId"],
             repo=data["repo"],
@@ -64,13 +65,7 @@ def make_whitespace_control(path: str, source: str) -> ControlSample:
     """
     lines = source.splitlines()
     first = lines[0] if lines else ""
-    diff = (
-        f"--- a/{path}\n"
-        f"+++ b/{path}\n"
-        "@@ -1,1 +1,1 @@\n"
-        f"-{first}\n"
-        f"+{first}  \n"
-    )
+    diff = f"--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-{first}\n+{first}  \n"
     return ControlSample(
         sample_id=f"control:{path}",
         repo="control",
@@ -84,9 +79,7 @@ def make_whitespace_control(path: str, source: str) -> ControlSample:
     )
 
 
-def generate_noop_controls(
-    files: Mapping[str, str], count: int
-) -> list[ControlSample]:
+def generate_noop_controls(files: Mapping[str, str], count: int) -> list[ControlSample]:
     """Generate up to ``count`` whitespace no-op controls from ``files``.
 
     ``files`` maps path -> file contents. One control is produced per file, in
@@ -137,7 +130,5 @@ def is_noop_diff(diff: str) -> bool:
     # Any leftover removed line that wasn't whitespace-matched => real change.
     if any(r for r in remaining_removed):
         return False
-    # Any leftover added line that has actual content => real change.
-    if any(a for a in leftover_added):
-        return False
-    return True
+    # No-op iff there is also no leftover added line with actual content.
+    return not any(a for a in leftover_added)

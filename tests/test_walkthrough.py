@@ -84,18 +84,14 @@ class TestSummary:
 
     def test_uses_pr_title_when_present(self):
         plans = [_file_plan("src/api/auth.py")]
-        md = wt.build_walkthrough(
-            {"title": "Add OAuth token refresh"}, plans, []
-        )
+        md = wt.build_walkthrough({"title": "Add OAuth token refresh"}, plans, [])
         assert "Add OAuth token refresh" in md
 
     def test_pr_title_is_escaped_not_executed(self):
         # PR title is UNTRUSTED data; markdown control chars must be neutralized
         # (pipes escaped) so it can never break out of a table cell downstream.
         plans = [_file_plan("src/api/auth.py")]
-        md = wt.build_walkthrough(
-            {"title": "evil | title <!-- x -->"}, plans, []
-        )
+        md = wt.build_walkthrough({"title": "evil | title <!-- x -->"}, plans, [])
         # The raw unescaped pipe sequence must not appear verbatim in a way that
         # could corrupt a table row.
         assert "evil \\| title" in md
@@ -139,7 +135,10 @@ class TestGroupedTable:
         md = wt.build_walkthrough({}, plans, [])
         # Header carries plain-language description + change-purpose columns.
         header = next(
-            ln for ln in md.splitlines() if ln.startswith("|") and "---" not in ln
+            ln
+            for ln in md.splitlines()
+            if ln.startswith("|")
+            and "---" not in ln
             and ("Files" in ln or "Group" in ln or "Change" in ln)
         )
         lowered = header.lower()
@@ -281,9 +280,7 @@ class TestHeuristicEdges:
         assert "Removes" in md
 
     def test_purpose_updates_for_mixed_changes(self):
-        plan = _file_plan(
-            "src/mix.py", file_type="code", diff="-old = 1\n+new = 2"
-        )
+        plan = _file_plan("src/mix.py", file_type="code", diff="-old = 1\n+new = 2")
         md = wt.build_walkthrough({}, [plan], [])
         assert "Updates" in md
 
@@ -291,9 +288,7 @@ class TestHeuristicEdges:
         plans = [_file_plan(f"src/api/f{i}.py") for i in range(20)]
         md = wt.build_walkthrough({}, plans, [])
         # Single group (src/api) with a "+N more" filename suffix.
-        api_row = next(
-            ln for ln in md.splitlines() if ln.startswith("| `src/api`")
-        )
+        api_row = next(ln for ln in md.splitlines() if ln.startswith("| `src/api`"))
         assert "more" in api_row
 
     def test_mermaid_disambiguates_same_filename(self):

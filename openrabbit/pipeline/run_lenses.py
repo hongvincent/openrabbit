@@ -18,7 +18,8 @@ with ``FakeProvider``.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any, Optional
 
 from openrabbit.domain import Message
 from openrabbit.findings import (
@@ -129,9 +130,7 @@ def _parse_finding(raw: Mapping[str, Any]) -> Optional[Finding]:
     if suggestion is not None:
         suggestion = str(suggestion)
 
-    fingerprint = compute_fingerprint(
-        str(file), str(rule_id), _normalized_context(raw)
-    )
+    fingerprint = compute_fingerprint(str(file), str(rule_id), _normalized_context(raw))
     return Finding(
         file=str(file),
         start_line=start_line,
@@ -224,9 +223,7 @@ def run_lenses(
     """
     if not file_plan.lenses:
         return []
-    file_message = build_file_message(
-        file_plan, enclosing_fetcher=enclosing_fetcher
-    )
+    file_message = build_file_message(file_plan, enclosing_fetcher=enclosing_fetcher)
     findings: list[Finding] = []
     for lens_name in file_plan.lenses:
         prompt = lens_prompts.get(lens_name)

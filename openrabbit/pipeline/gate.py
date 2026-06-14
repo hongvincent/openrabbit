@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Optional, Union
 
 from openrabbit.config import Config
 
@@ -38,7 +39,13 @@ _LOCKFILE_NAMES = (
     "gemfile.lock",
     "uv.lock",
 )
-_GENERATED_SEGMENTS = ("/dist/", "/build/", "/generated/", "/__generated__/", "/vendor/")
+_GENERATED_SEGMENTS = (
+    "/dist/",
+    "/build/",
+    "/generated/",
+    "/__generated__/",
+    "/vendor/",
+)
 _GENERATED_SUFFIXES = (".min.js", ".min.css", ".lock", ".map")
 
 # Match the "+++ b/<path>" header lines of a unified diff to enumerate files.
@@ -94,7 +101,9 @@ class StateStore:
 
     def _save(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        self._path.write_text(
+            json.dumps(data, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
     @staticmethod
     def _key(repo: str, pr_number: int) -> str:
@@ -255,9 +264,7 @@ def is_ignorable_file(path: str) -> bool:
         return True
     if any(seg in f"/{lower}" for seg in _GENERATED_SEGMENTS):
         return True
-    if any(lower.endswith(suf) for suf in _GENERATED_SUFFIXES):
-        return True
-    return False
+    return any(lower.endswith(suf) for suf in _GENERATED_SUFFIXES)
 
 
 # --------------------------------------------------------------------------- #

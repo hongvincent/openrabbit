@@ -20,8 +20,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 from openrabbit.config import Config, load_config
 from openrabbit.domain import (
@@ -30,9 +31,8 @@ from openrabbit.domain import (
     ToolCall,
     Usage,
 )
-from openrabbit.providers.base import FakeProvider, Provider
-
 from openrabbit.pipeline import orchestrator as orch
+from openrabbit.providers.base import FakeProvider, Provider
 
 DEFAULT_CONFIG_NAMES = (".openrabbit.yaml", ".openrabbit.yml")
 
@@ -49,6 +49,41 @@ def _load_config_or_default(config_path: Optional[str]) -> Config:
             return load_config(candidate)
     # No config on disk: fall back to a sane default (Config has defaults).
     return load_config({"version": 1})
+
+
+def _emit_model_role_warnings(config: Config) -> None:
+    """Print soft ``model_roles`` validation warnings to stderr (advisory).
+
+    ``config.validate_model_roles`` returns human-readable, severity-prefixed
+    soft problems (unknown model id, off-allow-list region for a Converse model,
+    missing region). Hard errors already fail :func:`load_config`, so anything
+    surfaced here is non-fatal — we warn but never change the exit code.
+    """
+    from openrabbit.config import validate_model_roles
+
+    for warning in validate_model_roles(config):
+        print(f"openrabbit: {warning}", file=sys.stderr)
+
+
+def _warn_existing_config(repo: str) -> None:
+    """Surface soft ``model_roles`` warnings for an existing config under ``repo``.
+
+    Best-effort: if a ``.openrabbit.yaml``/``.yml`` already exists at the repo
+    root, load it and print any soft warnings (so re-running ``init`` flags a
+    mis-region'd model). A missing or unparsable config is silently skipped —
+    ``init``'s job is to scaffold, not to validate. Hard errors are swallowed
+    here so onboarding is never blocked by a pre-existing broken config.
+    """
+    root = Path(repo)
+    for name in DEFAULT_CONFIG_NAMES:
+        candidate = root / name
+        if candidate.exists():
+            try:
+                config = load_config(candidate)
+            except Exception:
+                return
+            _emit_model_role_warnings(config)
+            return
 
 
 def _read_diff(diff_arg: Optional[str], stdin: Any) -> str:
@@ -82,7 +117,9 @@ def _demo_finding_dict() -> dict[str, Any]:
 def _emit_findings_result(findings: list[dict[str, Any]]) -> CompletionResult:
     return CompletionResult(
         text="",
-        tool_calls=[ToolCall(id="f", name="emit_findings", args={"findings": findings})],
+        tool_calls=[
+            ToolCall(id="f", name="emit_findings", args={"findings": findings})
+        ],
         finish_reason=FinishReason.TOOL_USE,
         usage=Usage(),
     )
@@ -98,7 +135,12 @@ def _verify_result(confidence: float) -> CompletionResult:
                 name="verify_findings",
                 args={
                     "verdicts": [
-                        {"id": 0, "keep": True, "confidence": confidence, "rationale": "demo"}
+                        {
+                            "id": 0,
+                            "keep": True,
+                            "confidence": confidence,
+                            "rationale": "demo",
+                        }
                     ]
                 },
             )
@@ -155,6 +197,8 @@ def _open_learnings_store(args: argparse.Namespace) -> Optional[Any]:
 
 def _cmd_review(args: argparse.Namespace) -> int:
     config = _load_config_or_default(args.config)
+    # Surface soft model_roles warnings (advisory; never fails the run).
+    _emit_model_role_warnings(config)
     learnings_store = _open_learnings_store(args)
 
     if args.offline:
@@ -193,7 +237,9 @@ def _cmd_review_online(
         print("error: GITHUB_TOKEN is required for online review", file=sys.stderr)
         return 2
     if not args.repo or not args.pr:
-        print("error: --repo OWNER/NAME and --pr N are required online", file=sys.stderr)
+        print(
+            "error: --repo OWNER/NAME and --pr N are required online", file=sys.stderr
+        )
         return 2
 
     from openrabbit.adapters.github import GitHubAdapter, GitHubRepo
@@ -327,7 +373,9 @@ def _cmd_learn(args: argparse.Namespace) -> int:
     if args.text:
         scope = args.scope or args.repo
         if not scope:
-            print("error: --text needs --scope OWNER[/NAME] (or --repo)", file=sys.stderr)
+            print(
+                "error: --text needs --scope OWNER[/NAME] (or --repo)", file=sys.stderr
+            )
             return 2
         provenance = {
             "pr": args.pr if args.pr is not None else "",
@@ -348,6 +396,188 @@ def _cmd_learn(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# eval command — dogfood eval runner (SPEC §10, item 17)                        #
+# --------------------------------------------------------------------------- #
+class _EvalFixtureProvider(Provider):
+    """A deterministic, network-free provider for the offline ``eval`` fixtures.
+
+    It answers by the OFFERED tool (stable regardless of call order/count):
+    ``emit_findings`` -> a small scripted finding set, ``verify_findings`` ->
+    keep-all verdicts, ``emit_verdict`` -> a ``match`` judge verdict. This lets
+    ``openrabbit eval`` produce a real scorecard with zero credentials.
+    """
+
+    def __init__(self, *, emit: bool = True) -> None:
+        self._emit = emit
+
+    @property
+    def name(self) -> str:
+        return "eval-fixture"
+
+    @property
+    def model(self) -> str:
+        return "eval-fixture-0"
+
+    def complete(
+        self,
+        system: str,
+        messages: list[Any],
+        tools: Optional[list[Any]],
+        max_tokens: int,
+        cache_prefix: Optional[str],
+        **opts: Any,
+    ) -> CompletionResult:
+        names = {getattr(t, "name", None) for t in (tools or [])}
+        if "emit_findings" in names:
+            findings = [_eval_fixture_finding()] if self._emit else []
+            return _emit_findings_result(findings)
+        if "verify_findings" in names:
+            verdicts = [
+                {"id": i, "keep": True, "confidence": 0.92, "rationale": "fixture"}
+                for i in range(64)
+            ]
+            return CompletionResult(
+                text="",
+                tool_calls=[
+                    ToolCall(
+                        id="v", name="verify_findings", args={"verdicts": verdicts}
+                    )
+                ],
+                finish_reason=FinishReason.TOOL_USE,
+                usage=Usage(),
+            )
+        if "emit_verdict" in names:
+            return CompletionResult(
+                text="",
+                tool_calls=[
+                    ToolCall(
+                        id="j",
+                        name="emit_verdict",
+                        args={
+                            "verdict": "match",
+                            "confidence": 0.9,
+                            "rationale": "fixture",
+                        },
+                    )
+                ],
+                finish_reason=FinishReason.TOOL_USE,
+                usage=Usage(),
+            )
+        return CompletionResult(
+            text="", tool_calls=[], finish_reason=FinishReason.STOP, usage=Usage()
+        )
+
+
+def _eval_fixture_finding() -> dict[str, Any]:
+    """The single scripted finding the offline eval fixtures emit."""
+    return {
+        "file": "src/app.py",
+        "startLine": 1,
+        "endLine": 3,
+        "side": "RIGHT",
+        "severity": "high",
+        "category": "correctness",
+        "confidence": 90,
+        "title": "Potential defect flagged by the offline fixture reviewer",
+        "body": "Scripted offline finding (no model call).",
+        "ruleId": "openrabbit/correctness/fixture",
+    }
+
+
+def _have_bedrock_creds() -> bool:
+    """Best-effort pre-flight for usable Bedrock credentials (no network call).
+
+    This gates whether ``--online`` *attempts* a live call; it is NOT a guarantee
+    the creds are valid. ``AWS_BEARER_TOKEN_BEDROCK`` / explicit access keys are
+    strong signals; ``AWS_PROFILE`` is best-effort only — it is commonly exported
+    in shells even when the underlying SSO session is expired, so a truthy
+    ``AWS_PROFILE`` clears this gate but the real call may still fail downstream in
+    boto3 (where the actual credential resolution happens).
+    """
+    import os
+
+    return any(
+        os.environ.get(k)
+        for k in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_PROFILE")
+    )
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    """Run the dogfood eval harness end-to-end and print the scorecard.
+
+    Offline by default: a small scripted-fixture provider drives the review +
+    judge with no network and no credentials. ``--online`` switches to real
+    Bedrock providers built from ``.openrabbit.yaml`` and is REQUIRED for a real
+    false-positive measurement — it is gated on credentials (checklist item 20).
+    """
+    from openrabbit.eval.runner import run_eval
+
+    config = _load_config_or_default(args.config)
+    repo = args.repo or "."
+
+    if args.online:
+        # Real FP measurement needs live Bedrock creds (item 20). We never make a
+        # network call without them; fail fast with a clear, actionable message.
+        if not _have_bedrock_creds():
+            print(
+                "error: --online requires real Bedrock credentials (item 20): set "
+                "AWS_BEARER_TOKEN_BEDROCK or run `aws sso login`. The offline "
+                "default (no flag) runs with scripted fixtures and no creds.",
+                file=sys.stderr,
+            )
+            return 2
+        roles = config.model_roles
+        finder_role = roles.get("finder")
+        verifier_role = roles.get("verifier", finder_role)
+        if finder_role is None:
+            print(
+                "error: --online needs a 'finder' model role in .openrabbit.yaml",
+                file=sys.stderr,
+            )
+            return 2
+        # Build the finder provider + the cross-family verifier (GPT-5.5). The
+        # verifier drives BOTH the in-pipeline stage-2 verify pass (so the FP
+        # budget reflects the real Nova-finds → GPT-5.5-verifies routing the
+        # design relies on) AND the LLM-as-judge grading. Adapters import their
+        # cloud SDKs lazily here.
+        review_provider = orch.model_factory(finder_role)
+        verifier_provider = (
+            orch.model_factory(verifier_role) if verifier_role else review_provider
+        )
+        report = run_eval(
+            repo,
+            provider=review_provider,
+            verifier_provider=verifier_provider,
+            judge_provider=verifier_provider,
+            config=config,
+            limit=args.limit,
+        )
+    else:
+        # Offline scripted fixtures: a flagging reviewer + match judge.
+        report = run_eval(
+            repo,
+            provider=lambda: _EvalFixtureProvider(emit=True),
+            config=config,
+            limit=args.limit,
+        )
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        print(report.scorecard.format_pretty())
+        print(
+            f"\ngolden samples: {report.golden_count}   "
+            f"negative controls: {report.control_count}",
+        )
+        if not args.online:
+            print(
+                "(offline scripted fixtures — for a real FP<10% number run "
+                "`openrabbit eval --online` with Bedrock creds; item 20)",
+            )
+    return 0 if report.scorecard.passed or not args.require_pass else 1
+
+
+# --------------------------------------------------------------------------- #
 # init command — one-command onboarding (PRD §11, item 11)                     #
 # --------------------------------------------------------------------------- #
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -361,6 +591,9 @@ def _cmd_init(args: argparse.Namespace) -> int:
     from openrabbit.init import scaffold
 
     repo = args.path or "."
+    # If the repo already has a config, surface any soft model_roles warnings so
+    # a re-run of init flags a mis-region'd/unknown model (advisory; never fails).
+    _warn_existing_config(repo)
     dry_run = not args.write
     plan = scaffold(
         repo,
@@ -423,11 +656,15 @@ def _print_result(result: orch.ReviewResult) -> None:
 # argument parsing                                                            #
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="openrabbit", description="openrabbit AI code review")
+    parser = argparse.ArgumentParser(
+        prog="openrabbit", description="openrabbit AI code review"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     rev = sub.add_parser("review", help="review a PR / diff")
-    rev.add_argument("--offline", action="store_true", help="run offline with fixtures (no creds)")
+    rev.add_argument(
+        "--offline", action="store_true", help="run offline with fixtures (no creds)"
+    )
     rev.add_argument("--diff", help="path to a unified diff file (offline; else stdin)")
     rev.add_argument("--config", help="path to .openrabbit.yaml")
     rev.add_argument("--fixtures", help="offline fixture set (e.g. 'demo')")
@@ -436,8 +673,12 @@ def build_parser() -> argparse.ArgumentParser:
     rev.add_argument("--commit", help="head commit SHA")
     rev.add_argument("--title", help="PR title")
     rev.add_argument("--body", help="PR body")
-    rev.add_argument("--bot-login", dest="bot_login", help="bot login for dedup (online)")
-    rev.add_argument("--post", action="store_true", help="actually post the review (online)")
+    rev.add_argument(
+        "--bot-login", dest="bot_login", help="bot login for dedup (online)"
+    )
+    rev.add_argument(
+        "--post", action="store_true", help="actually post the review (online)"
+    )
     rev.add_argument(
         "--learnings-store",
         dest="learnings_store",
@@ -459,7 +700,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="record a dismissal (needs --repo, --rule-id, --category, --file)",
     )
-    learn.add_argument("--scope", help="learning scope: OWNER (org) or OWNER/NAME (repo)")
+    learn.add_argument(
+        "--scope", help="learning scope: OWNER (org) or OWNER/NAME (repo)"
+    )
     learn.add_argument("--repo", help="OWNER/NAME (dismissal repo / learning scope)")
     learn.add_argument("--rule-id", dest="rule_id", help="finding ruleId (dismissal)")
     learn.add_argument("--category", help="finding category")
@@ -467,6 +710,41 @@ def build_parser() -> argparse.ArgumentParser:
     learn.add_argument("--pr", type=int, help="PR number (learning provenance)")
     learn.add_argument("--user", help="author (learning provenance)")
     learn.set_defaults(func=_cmd_learn)
+
+    ev = sub.add_parser(
+        "eval",
+        help="run the dogfood eval harness on a repo and print the scorecard",
+    )
+    ev.add_argument(
+        "--repo",
+        help="path to a local git repo to mine for the golden set (default: cwd)",
+    )
+    ev.add_argument("--config", help="path to .openrabbit.yaml")
+    ev.add_argument(
+        "--limit",
+        type=int,
+        help="cap the golden set to the first N bug samples (smoke/CI)",
+    )
+    ev.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the EvalReport (scorecard + corpus sizes) as JSON",
+    )
+    ev.add_argument(
+        "--online",
+        action="store_true",
+        help=(
+            "use real Bedrock providers for a real FP measurement (requires "
+            "creds; item 20). Default is offline scripted fixtures."
+        ),
+    )
+    ev.add_argument(
+        "--require-pass",
+        dest="require_pass",
+        action="store_true",
+        help="exit non-zero when the FP budget is exceeded (CI gate)",
+    )
+    ev.set_defaults(func=_cmd_eval)
 
     init = sub.add_parser(
         "init",
