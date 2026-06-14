@@ -51,9 +51,10 @@ Each item = a dynamic workflow (TDD + adversarial review), then `uv run pytest`,
 13. [x] org rollout artifacts — DONE (iter4): `.github` starter workflow-template + reusable workflow (moved to `.github/workflows/`) + `org/ruleset.json` (required check) + `org/safe-settings.yml`. (adversarial review fixed 2 CRITICAL wiring bugs: plugin-skills field + reusable-workflow path)
 
 ### Phase 4 — Enterprise (optional, gated)
-14. [ ] SARIF output adapter (Security-tab tier, GHAS-gated) + Check-Run adapter (merge gating)
-15. [ ] GitHub App mode (webhooks, installation tokens) as an alternative to Action-first
-16. [ ] Greptile-style codebase index (tree-sitter symbol/call graph + embeddings; LanceDB-on-S3 or pgvector) behind an embeddings interface
+14. [x] SARIF + Check-Run adapters — DONE (iter5, commit a430eeb): `adapters/sarif.py` (SARIF 2.1.0, security-severity mapping, partialFingerprints) + `adapters/checkrun.py` (advisory-neutral default, gate-configurable, >50-annotation chunking)
+15. [ ] GitHub App mode (webhooks, installation tokens) — partial build was killed by session limit; partial artifacts REMOVED, rebuild fresh after reset
+16. [ ] Greptile-style codebase index (stdlib-ast symbol/import graph + embeddings interface, offline-safe) — not started (session limit)
+> ⏸ **SESSION LIMIT** hit during iter5 (resets ~03:20 Asia/Seoul 2026-06-15). Loop is idling (time-aware heartbeat) until reset, then resumes: rebuild 15 + 16, then 17-19, then STOP.
 
 ### Cross-cutting / quality gates
 17. [ ] **Dogfood eval on `smnt-agent-core`**: build golden set from merged PRs + reverts/hotfixes → run scorecard → prove **FP < 10%** at the default gate (tune prompts/threshold)
