@@ -430,7 +430,8 @@ class TestEmitWiring:
             usage=Usage(input_tokens=10, output_tokens=5),
         )
 
-    def _verify_result(self, confidence, keep=True):
+    def _verify_batch_result(self, verdicts):
+        """A batched verify result: ``verdicts`` is a list of (id, keep, conf)."""
         from openrabbit.domain import (
             CompletionResult,
             FinishReason,
@@ -443,8 +444,18 @@ class TestEmitWiring:
             tool_calls=[
                 ToolCall(
                     id="v",
-                    name="verify_finding",
-                    args={"keep": keep, "confidence": confidence, "rationale": "ok"},
+                    name="verify_findings",
+                    args={
+                        "verdicts": [
+                            {
+                                "id": vid,
+                                "keep": keep,
+                                "confidence": conf,
+                                "rationale": "ok",
+                            }
+                            for vid, keep, conf in verdicts
+                        ]
+                    },
                 )
             ],
             finish_reason=FinishReason.TOOL_USE,
@@ -495,7 +506,9 @@ class TestEmitWiring:
                 self._emit_findings_result([]),
             ]
         )
-        verifier = FakeProvider([self._verify_result(0.95), self._verify_result(0.92)])
+        verifier = FakeProvider(
+            [self._verify_batch_result([(0, True, 0.95), (1, True, 0.92)])]
+        )
 
         result = orch.review(
             config,

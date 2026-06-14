@@ -39,10 +39,11 @@ Each item = a dynamic workflow (TDD + adversarial review), then `uv run pytest`,
 6. [x] Walkthrough enrichment — DONE (iter2): grouped changed-files table + Mermaid (interaction-gated, quote-escaped, heuristic tightened for low noise)
 
 ### Phase 2 — Trust & cost
-7. [ ] Learnings/memory store + feedback loop (dismissal → confidence recalibration + auto-suppression); per-repo/org scope
-8. [ ] Verifier formalization: HIGH/CRITICAL scoping + batching (kill the N+1)
-9. [ ] Prompt-caching wiring end-to-end (stable prefix; Converse cachePoint + Responses prompt_cache_key) + per-PR Usage cost telemetry
-10. [ ] Model routing tuning hooks + `.openrabbit.yaml` validation of model_roles against Bedrock allow-lists/regions
+7. [x] Learnings/memory store + feedback loop — DONE (iter3): LearningsStore (local-JSON, repo/org scope), adjust_confidence down-weights dismissed-style findings below gate, `learn` CLI subcommand, injected into cacheable prefix (fenced)
+8. [x] Verifier batching + HIGH/CRITICAL scoping — DONE (iter3): single batched verify call (killed N+1), `review.verify_min_severity` (default high), stable-id verdict mapping
+9. [x] Prompt-caching wiring + cost telemetry — DONE (iter3): byte-stable prefix + cache key, cachePoint/prompt_cache_key plumbed, per-PR Usage aggregation + `pricing.py` cost estimate
+10. [x] model_roles validation — DONE (iter3): `bedrock_models.py` allow-lists, GPT-5.5 region ERROR outside us-east-1/2, adapter-family mapping
+- [ ] **iter3 review follow-ups (minor, from rate-limited fix agent):** ✅ HIGH+MED fence-escape prompt-injection FIXED inline (iter3.1, 5 regression tests). Remaining minor: cost USD prices verifier tokens at finder rate (orchestrator); CLI doesn't surface soft model_roles warnings; verify `_VERDICT_SCHEMA` lacks additionalProperties:false; unbounded learning text length; config dup verdict loop. → fold into cross-cutting hardening (item 18/19).
 
 ### Phase 3 — Onboarding & skillification
 11. [ ] `gh openrabbit init` (gh extension): detect stack → write `.openrabbit.yaml` + SHA-pinned caller workflow → OIDC trust → register secrets → marketplace+plugin enable
