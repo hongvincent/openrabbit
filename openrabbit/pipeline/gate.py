@@ -62,9 +62,24 @@ class GateDecision:
 class StateStore:
     """Tiny local JSON state for incremental review (Phase 0 stand-in for DynamoDB).
 
-    Keyed by ``"<repo>#<pr_number>"`` -> last reviewed head SHA. The file is
+    Keyed by ``"<repo>#<pr_number>"``. Each entry holds two dedup-relevant
+    facts:
+
+    * ``last_reviewed_sha`` — the head SHA of the most recent review (drives the
+      gate's incremental skip / synchronize-only-new-commits behavior), and
+    * ``posted_fingerprints`` — a set of finding fingerprints already posted, so
+      re-reviews suppress the same findings even **offline / before GitHub
+      review threads load** (a second, local dedup source alongside threads).
+
+    The on-disk value is a small dict ``{"last_reviewed_sha": str,
+    "posted_fingerprints": [str, ...]}``. For backward compatibility a legacy
+    bare-string value (the original Phase-0 format that stored only the SHA) is
+    read transparently and migrated in place on the next write. The file is
     created lazily; concurrent writers are not a concern for the local CLI.
     """
+
+    _SHA_KEY = "last_reviewed_sha"
+    _FP_KEY = "posted_fingerprints"
 
     def __init__(self, path: PathLike) -> None:
         self._path = Path(path)
@@ -85,12 +100,83 @@ class StateStore:
     def _key(repo: str, pr_number: int) -> str:
         return f"{repo}#{pr_number}"
 
-    def last_reviewed_sha(self, repo: str, pr_number: int) -> Optional[str]:
-        return self._load().get(self._key(repo, pr_number))
+    @classmethod
+    def _normalize_entry(cls, raw: Any) -> dict[str, Any]:
+        """Coerce a stored entry (legacy bare SHA string or dict) to a dict."""
+        if isinstance(raw, str):
+            # Legacy Phase-0 format: the value was the bare head SHA.
+            return {cls._SHA_KEY: raw, cls._FP_KEY: []}
+        if isinstance(raw, dict):
+            return raw
+        return {}
 
-    def record_review(self, repo: str, pr_number: int, head_sha: str) -> None:
+    def last_reviewed_sha(self, repo: str, pr_number: int) -> Optional[str]:
+        entry = self._normalize_entry(self._load().get(self._key(repo, pr_number)))
+        sha = entry.get(self._SHA_KEY)
+        return sha if isinstance(sha, str) else None
+
+    def record_review(
+        self,
+        repo: str,
+        pr_number: int,
+        head_sha: str,
+        *,
+        fingerprints: Optional[set[str]] = None,
+    ) -> None:
+        """Record the reviewed head SHA and (optionally) union posted fingerprints.
+
+        Passing ``fingerprints`` folds the SHA update and the fingerprint union
+        into a single load/save, avoiding a second read-modify-write cycle and
+        the brief window where the SHA is recorded but fingerprints are not.
+        """
         data = self._load()
-        data[self._key(repo, pr_number)] = head_sha
+        key = self._key(repo, pr_number)
+        entry = self._normalize_entry(data.get(key))
+        entry[self._SHA_KEY] = head_sha
+        existing = {str(fp) for fp in self._coerce_fp_list(entry.get(self._FP_KEY))}
+        if fingerprints:
+            existing |= {str(fp) for fp in fingerprints}
+        entry[self._FP_KEY] = sorted(existing)
+        data[key] = entry
+        self._save(data)
+
+    @staticmethod
+    def _coerce_fp_list(value: Any) -> list[Any]:
+        """Treat only list/tuple/set as a fingerprint collection.
+
+        A corrupted state file whose ``posted_fingerprints`` is a non-iterable
+        (an int) or a bare string (which would iterate per character) degrades
+        to empty rather than raising — mirroring the defensive coercion used for
+        legacy entry shapes.
+        """
+        if isinstance(value, (list, tuple, set)):
+            return list(value)
+        return []
+
+    def get_posted_fingerprints(self, repo: str, pr_number: int) -> set[str]:
+        """Return the set of finding fingerprints already posted for this PR."""
+        entry = self._normalize_entry(self._load().get(self._key(repo, pr_number)))
+        fps = self._coerce_fp_list(entry.get(self._FP_KEY))
+        return {str(fp) for fp in fps}
+
+    def record_posted_fingerprints(
+        self, repo: str, pr_number: int, fingerprints: set[str]
+    ) -> None:
+        """Union ``fingerprints`` into the PR's persisted posted set.
+
+        Idempotent and additive: recording the same fingerprint twice (e.g. a
+        re-review that re-finds an already-posted issue) is a no-op. Recording
+        an empty set does not create or rewrite state.
+        """
+        if not fingerprints:
+            return
+        data = self._load()
+        key = self._key(repo, pr_number)
+        entry = self._normalize_entry(data.get(key))
+        existing = {str(fp) for fp in self._coerce_fp_list(entry.get(self._FP_KEY))}
+        existing |= {str(fp) for fp in fingerprints}
+        entry[self._FP_KEY] = sorted(existing)
+        data[key] = entry
         self._save(data)
 
 

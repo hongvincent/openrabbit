@@ -8,10 +8,14 @@ plus a per-file variable suffix (the diff fenced as UNTRUSTED data). The prefix
 is byte-stable so prompt caching (SPEC 7.3) keys cleanly across files within a
 PR. The per-file diff is the only thing that changes between lens calls.
 
-Enclosing-context pre-fetch (grep/read_file/git log) is best-effort in Phase 0:
-the deterministic spine exposes a hook (:func:`gather_enclosing_context`) that
-defaults to a no-op so unit tests stay offline. Production wires real symbol
-lookups behind the same signature.
+Enclosing-context pre-fetch (window read / enclosing scope / git log) is
+best-effort: the deterministic spine exposes a hook
+(:func:`gather_enclosing_context`) that defaults to a no-op so unit tests and
+offline/no-git runs stay deterministic. The fetcher is threaded
+``review() -> run_lenses() -> run_lens() -> build_file_message(...,
+enclosing_fetcher=...)``; the online CLI path constructs and injects the real
+:class:`openrabbit.pipeline.enclosing.GitEnclosingFetcher`, while offline/unit
+runs keep the no-op default.
 """
 
 from __future__ import annotations
@@ -115,10 +119,14 @@ def build_file_message(
 
     The diff is the only variable suffix after the byte-stable prefix. An
     optional enclosing-context block (from ``enclosing_fetcher``) is prepended
-    when available; in Phase 0 the default fetcher returns nothing so the
-    message stays offline and deterministic.
+    when available; the default fetcher returns nothing so the message stays
+    offline and deterministic. Fetcher calls are best-effort: any failure
+    degrades to a diff-only message rather than breaking the pipeline.
     """
-    enclosing = enclosing_fetcher(file_plan)
+    try:
+        enclosing = enclosing_fetcher(file_plan)
+    except Exception:
+        enclosing = None
     lines = [
         f"Review file `{file_plan.path}` "
         f"(type={file_plan.file_type}, risk={file_plan.risk}).",

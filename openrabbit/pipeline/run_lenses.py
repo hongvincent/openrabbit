@@ -28,7 +28,11 @@ from openrabbit.findings import (
     Finding,
     compute_fingerprint,
 )
-from openrabbit.pipeline.context import build_file_message
+from openrabbit.pipeline.context import (
+    EnclosingFetcher,
+    build_file_message,
+    gather_enclosing_context,
+)
 from openrabbit.pipeline.route import FilePlan
 from openrabbit.providers.base import Provider
 
@@ -170,12 +174,21 @@ def run_lens(
     *,
     prefix: str,
     file_message: Optional[Message] = None,
+    enclosing_fetcher: EnclosingFetcher = gather_enclosing_context,
     max_tokens: int = DEFAULT_FINDER_MAX_TOKENS,
     cache_prefix: Optional[str] = None,
 ) -> list[Finding]:
-    """Run ONE lens over one file via the finder provider; return findings."""
+    """Run ONE lens over one file via the finder provider; return findings.
+
+    ``enclosing_fetcher`` is forwarded to :func:`build_file_message` only when a
+    pre-built ``file_message`` is not supplied. The default is the offline-safe
+    no-op so unit tests never shell out; production passes a
+    :class:`~openrabbit.pipeline.enclosing.GitEnclosingFetcher`.
+    """
     if file_message is None:
-        file_message = build_file_message(file_plan)
+        file_message = build_file_message(
+            file_plan, enclosing_fetcher=enclosing_fetcher
+        )
     system = f"{prefix}\n\n--- LENS: {lens_name} ---\n{lens_prompt}"
     result = finder.complete(
         system,
@@ -194,6 +207,7 @@ def run_lenses(
     lens_prompts: Mapping[str, str],
     *,
     prefix: str,
+    enclosing_fetcher: EnclosingFetcher = gather_enclosing_context,
     max_tokens: int = DEFAULT_FINDER_MAX_TOKENS,
     cache_prefix: Optional[str] = None,
 ) -> list[Finding]:
@@ -202,10 +216,17 @@ def run_lenses(
     A file with no assigned lenses (docs/lockfile/generated) returns ``[]``
     without ever calling the provider. Lenses with no available prompt are
     skipped.
+
+    ``enclosing_fetcher`` (default: offline-safe no-op) is used once to build the
+    shared per-file message that every lens reuses, so the enclosing-context
+    block is fetched at most once per file. Production injects a
+    :class:`~openrabbit.pipeline.enclosing.GitEnclosingFetcher`.
     """
     if not file_plan.lenses:
         return []
-    file_message = build_file_message(file_plan)
+    file_message = build_file_message(
+        file_plan, enclosing_fetcher=enclosing_fetcher
+    )
     findings: list[Finding] = []
     for lens_name in file_plan.lenses:
         prompt = lens_prompts.get(lens_name)

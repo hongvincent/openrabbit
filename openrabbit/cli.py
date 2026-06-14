@@ -192,11 +192,24 @@ def _cmd_review_online(args: argparse.Namespace, config: Config) -> int:
             "title": args.title or "",
             "body": args.body or "",
         }
+        # Inject the real enclosing-context fetcher. The CI runner has the PR
+        # head checked out, so reading from the working tree (or the head ref)
+        # gives the finder lenses a bounded slice of surrounding code. This is
+        # best-effort and offline-safe: any failure degrades to a diff-only
+        # message. Untrusted diff paths are contained to the repo root by the
+        # fetcher's path/symlink checks.
+        from openrabbit.pipeline.enclosing import GitEnclosingFetcher
+
+        fetcher = GitEnclosingFetcher(
+            repo_root=Path.cwd(),
+            ref=args.commit if args.commit else None,
+        )
         result = orch.review(
             config,
             pr_context,
             providers,
             prior_fingerprints=prior_fps,
+            enclosing_fetcher=fetcher,
             emit=False,
         )
         if result.reviewed and args.post:
