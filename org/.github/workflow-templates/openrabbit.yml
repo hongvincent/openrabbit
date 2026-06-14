@@ -1,0 +1,58 @@
+# openrabbit — org starter workflow (PRD §11 control plane, §12 CI hardening).
+#
+# This is the STARTER workflow that appears in GitHub's "New workflow" picker
+# (Actions tab → "New workflow" → "By <org>"). When a repo selects it, GitHub
+# copies this file into `.github/workflows/openrabbit.yml`. It is a deliberately
+# THIN caller: all review logic lives in openrabbit's *reusable* workflow, which
+# this file invokes via `jobs.<id>.uses:` + `workflow_call`. A single central
+# SHA bump on that reference rolls the whole fleet forward (Dependabot for the
+# action SHAs).
+#
+# Onboarding checklist for the repo owner after adding this file:
+#   1. Set the org/repo secret `OPENRABBIT_AWS_ROLE_ARN` to the IAM role that
+#      trusts this repo's GitHub OIDC subject (keyless Bedrock auth).
+#   2. (Recommended) commit a `.openrabbit.yaml` to tune model_roles/lenses.
+#
+# Security posture (SPEC §12):
+#   * Top-level permissions are least-privilege `contents: read`.
+#   * The caller job grants `pull-requests: write` (post the review) and
+#     `id-token: write` (OIDC → STS AssumeRoleWithWebIdentity, keyless Bedrock).
+#     These are required so the reusable workflow's `review` job can elevate.
+#   * Trigger is plain `pull_request` (NOT `pull_request_target`) so untrusted
+#     fork code never runs with secrets (forked-PR safety).
+#   * The reusable-workflow reference is SHA-pinned (immutable supply chain).
+name: openrabbit review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Least privilege by default; the caller job below requests exactly what the
+# reusable workflow's review job needs (a called workflow cannot be granted
+# more than the caller holds).
+permissions:
+  contents: read
+
+jobs:
+  openrabbit:
+    name: openrabbit
+    # Skip drafts; the reusable workflow also gates trivial/generated diffs.
+    if: ${{ github.event.pull_request.draft == false }}
+    permissions:
+      contents: read          # read the checked-out code for enclosing context
+      pull-requests: write    # post the advisory review (inline + walkthrough)
+      id-token: write         # OIDC → STS AssumeRoleWithWebIdentity (keyless Bedrock)
+    # Pinned to a SHA so a central bump rolls every onboarded repo forward.
+    # The <OWNER>/<PINNED_SHA> tokens are DELIBERATE placeholders — replace
+    # <OWNER> with your org and <PINNED_SHA> with the openrabbit release SHA you
+    # have vetted (Dependabot keeps this current). GitHub only resolves a
+    # reusable workflow under `.github/workflows/`, so the reusable workflow
+    # lives at `.github/workflows/reusable-workflow.yml` in the openrabbit repo.
+    uses: <OWNER>/openrabbit/.github/workflows/reusable-workflow.yml@<PINNED_SHA>  # REPLACE <OWNER>/<PINNED_SHA> — bump centrally
+    with:
+      pr: ${{ github.event.pull_request.number }}
+      commit: ${{ github.event.pull_request.head.sha }}
+      config: .openrabbit.yaml
+      aws_region: us-east-2
+    secrets:
+      aws_role_arn: ${{ secrets.OPENRABBIT_AWS_ROLE_ARN }}

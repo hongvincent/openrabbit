@@ -1,0 +1,21 @@
+{
+  "name": "openrabbit",
+  "version": "0.0.0",
+  "description": "High-trust, low-noise AI code review. Bundles openrabbit's portable review skills (the openrabbit-review orchestrator + the correctness, security, performance, tests, and maintainability lenses) as namespaced Agent Skills.",
+  "author": {
+    "name": "openrabbit",
+    "email": "hongvincent@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/hongvincent/openrabbit",
+  "license": "Apache-2.0",
+  "keywords": [
+    "code-review",
+    "review",
+    "pull-request",
+    "ai",
+    "security",
+    "correctness",
+    "static-analysis",
+    "agent-skills"
+  ]
+}

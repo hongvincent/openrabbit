@@ -347,6 +347,52 @@ def _cmd_learn(args: argparse.Namespace) -> int:
     return 2
 
 
+# --------------------------------------------------------------------------- #
+# init command — one-command onboarding (PRD §11, item 11)                     #
+# --------------------------------------------------------------------------- #
+def _cmd_init(args: argparse.Namespace) -> int:
+    """Detect the repo stack and plan/write the onboarding artifacts.
+
+    ``--dry-run`` (default) prints the plan + file contents and writes nothing;
+    ``--write`` writes ``.openrabbit.yaml`` + the thin caller workflow to disk.
+    No ``gh``/AWS/network mutation ever happens here — the printed wiring plan is
+    advisory; the ``gh`` extension shell wrapper performs the real gh calls.
+    """
+    from openrabbit.init import scaffold
+
+    repo = args.path or "."
+    dry_run = not args.write
+    plan = scaffold(
+        repo,
+        dry_run=dry_run,
+        force=args.force,
+        aws_region=args.aws_region,
+    )
+
+    if args.json:
+        payload = {
+            "wrote": plan.wrote,
+            "stack": {
+                "languages": plan.stack.languages,
+                "frameworks": plan.stack.frameworks,
+                "testCmd": plan.stack.test_cmd,
+                "externalTools": plan.stack.external_tools,
+            },
+            "files": [{"path": f.path, "content": f.content} for f in plan.files],
+            "wiringPlan": plan.wiring_plan,
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    print(plan.render())
+    if dry_run:
+        # Show the file bodies in dry-run so the user can review before writing.
+        for f in plan.files:
+            print(f"\n--- {f.path} ---")
+            print(f.content)
+    return 0
+
+
 def _print_result(result: orch.ReviewResult) -> None:
     cost = result.cost_summary.to_dict()
     payload = {
@@ -421,6 +467,43 @@ def build_parser() -> argparse.ArgumentParser:
     learn.add_argument("--pr", type=int, help="PR number (learning provenance)")
     learn.add_argument("--user", help="author (learning provenance)")
     learn.set_defaults(func=_cmd_learn)
+
+    init = sub.add_parser(
+        "init",
+        help="onboard a repo: detect stack + scaffold .openrabbit.yaml + caller workflow",
+    )
+    init.add_argument(
+        "--path",
+        help="repo path to onboard (default: current directory)",
+    )
+    init.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="print the plan + file contents without writing (default)",
+    )
+    init.add_argument(
+        "--write",
+        action="store_true",
+        help="write the scaffolded files to disk (else dry-run)",
+    )
+    init.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing files when writing",
+    )
+    init.add_argument(
+        "--aws-region",
+        dest="aws_region",
+        default="us-east-2",
+        help="primary AWS region for OIDC/STS + the verifier (default: us-east-2)",
+    )
+    init.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the plan as JSON (for the gh extension wrapper)",
+    )
+    init.set_defaults(func=_cmd_init)
     return parser
 
 

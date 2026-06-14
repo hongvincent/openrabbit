@@ -58,7 +58,14 @@ permissions:
 
 jobs:
   review:
-    name: openrabbit review
+    # Job NAME is deterministic and stable: GitHub reports the check for a
+    # reusable-workflow job as "<caller job name> / <reusable job name>". Both
+    # onboarding paths name the caller job "openrabbit" (the org template sets
+    # `name: openrabbit`; the init-generated caller uses job id `openrabbit` with
+    # no name, which GitHub renders as "openrabbit"), so the reported check is
+    # exactly "openrabbit / review". The org ruleset + safe-settings require that
+    # exact composite context. Do NOT rename without updating both.
+    name: review
     runs-on: ${{ inputs.runner }}
     permissions:
       contents: read          # read the checked-out code for enclosing context
@@ -95,12 +102,20 @@ jobs:
           role-session-name: openrabbit-review-${{ github.run_id }}
 
       - name: Run openrabbit review
+        # GitHub-hardening: never inline ${{ }} into a run script. Pass every
+        # value through env: and reference it as a QUOTED shell var so a future
+        # caller that wires free-text into config/commit cannot inject commands
+        # (the runner holds the OIDC/Bedrock role — runner RCE would be material).
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          OR_REPO: ${{ github.repository }}
+          OR_PR: ${{ inputs.pr }}
+          OR_COMMIT: ${{ inputs.commit }}
+          OR_CONFIG: ${{ inputs.config }}
         run: >-
           uv run openrabbit review
-          --repo ${{ github.repository }}
-          --pr ${{ inputs.pr }}
-          --commit ${{ inputs.commit }}
-          --config ${{ inputs.config }}
+          --repo "$OR_REPO"
+          --pr "$OR_PR"
+          --commit "$OR_COMMIT"
+          --config "$OR_CONFIG"
           --post

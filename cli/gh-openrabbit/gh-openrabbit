@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+#
+# gh-openrabbit — GitHub CLI extension entrypoint (PRD §11).
+#
+# Mirrors the `claude /install-github-app` one-command onboarding UX. The Python
+# layer (`python -m openrabbit.init`, advisory-only) does ALL planning and file
+# scaffolding and performs NO network mutation. This shell wrapper is the only
+# place real `gh` mutations happen, and only on the explicit, guarded non-dry-run
+# path (`init --write --apply`). Unit tests never exercise this file.
+#
+# Usage:
+#   gh openrabbit init                 # dry-run: print the plan + file contents
+#   gh openrabbit init --write         # write .openrabbit.yaml + caller workflow
+#   gh openrabbit init --write --apply # ALSO perform the gh mutations (guarded)
+#
+# Security posture (SPEC §12):
+#   * advisory-only: the reasoning layer (Python) holds no write credentials;
+#   * keyless: configures GitHub OIDC -> AWS STS trust, no long-lived secrets;
+#   * the gh mutations below are explicit, idempotent-ish, and require --apply.
+set -euo pipefail
+
+# --------------------------------------------------------------------------- #
+# locate the openrabbit python package                                        #
+# --------------------------------------------------------------------------- #
+# Prefer `uv run` (the project's runner); fall back to `python -m`. The extension
+# is expected to run from within (or be pointed at) a checkout of openrabbit, or
+# with openrabbit installed on PATH.
+run_init() {
+  if command -v uv >/dev/null 2>&1 && [ -f "pyproject.toml" ]; then
+    uv run python -m openrabbit.init "$@"
+  else
+    python3 -m openrabbit.init "$@"
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# argument parsing — separate openrabbit flags from the --apply gh switch      #
+# --------------------------------------------------------------------------- #
+SUBCMD="${1:-help}"
+shift || true
+
+APPLY=0
+WRITE=0
+PASSTHROUGH=()
+AWS_ROLE_ARN="${OPENRABBIT_AWS_ROLE_ARN:-}"
+
+for arg in "$@"; do
+  case "$arg" in
+    --apply)
+      APPLY=1
+      ;;
+    --write)
+      WRITE=1
+      PASSTHROUGH+=("$arg")
+      ;;
+    --role-arn=*)
+      AWS_ROLE_ARN="${arg#*=}"
+      ;;
+    *)
+      PASSTHROUGH+=("$arg")
+      ;;
+  esac
+done
+
+case "$SUBCMD" in
+  init)
+    # Always run the pure Python planner/scaffolder first (advisory-only, no
+    # network). With --write it scaffolds files; without it, just prints a plan.
+    # ${PASSTHROUGH[@]+...} guards against "unbound variable" under `set -u`
+    # when no passthrough flags were given (bash 3.2 / macOS compatible).
+    run_init ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
+
+    # The gh mutations are GUARDED behind --apply AND --write so that a plain
+    # `gh openrabbit init` never touches GitHub. Everything below is the ONLY
+    # network-touching code in openrabbit's onboarding path.
+    if [ "$APPLY" -eq 1 ]; then
+      if [ "$WRITE" -ne 1 ]; then
+        echo "error: --apply requires --write (refusing to mutate gh on a dry-run)" >&2
+        exit 2
+      fi
+      if ! command -v gh >/dev/null 2>&1; then
+        echo "error: --apply needs the GitHub CLI (gh) on PATH" >&2
+        exit 2
+      fi
+      if [ -z "$AWS_ROLE_ARN" ]; then
+        echo "error: --apply needs --role-arn=<arn> (or OPENRABBIT_AWS_ROLE_ARN)" >&2
+        echo "       the IAM role openrabbit assumes via OIDC for Bedrock." >&2
+        exit 2
+      fi
+      # Shape-check the ARN before storing it as a repo secret consumed by the
+      # reusable workflow's role-to-assume. A typo'd/wrong value would otherwise
+      # be stored silently and the workflow would try to assume an arbitrary ARN.
+      if ! printf '%s' "$AWS_ROLE_ARN" | grep -Eq '^arn:aws:iam::[0-9]{12}:role/.+'; then
+        echo "error: --role-arn must be an IAM role ARN (arn:aws:iam::<acct>:role/<name>)" >&2
+        exit 2
+      fi
+
+      echo "openrabbit: applying GitHub wiring via gh (the only network step)..." >&2
+      # 1) Required secret consumed by the caller workflow (keyless Bedrock).
+      #    Feed the value on stdin (--body -) so it never lands in argv (visible
+      #    via `ps`/`/proc/<pid>/cmdline`) or shell history.
+      printf '%s' "$AWS_ROLE_ARN" | gh secret set AWS_ROLE_ARN --body -
+
+      # 2) (Optional) an org/repo ruleset requiring the review check before merge
+      #    would go here, pinned to the reusable workflow SHA in Evaluate mode.
+      #    Left as a documented manual step (see the printed wiring plan) to keep
+      #    onboarding non-destructive by default.
+      echo "openrabbit: secret AWS_ROLE_ARN set. Review the printed wiring plan" >&2
+      echo "           for the OIDC trust policy + optional ruleset step." >&2
+    fi
+    ;;
+  help|--help|-h|"")
+    cat >&2 <<'USAGE'
+gh openrabbit — onboard a repo to openrabbit AI code review
+
+Commands:
+  init                  Print the onboarding plan (dry-run; writes nothing).
+  init --write          Scaffold .openrabbit.yaml + the SHA-pinned caller workflow.
+  init --write --apply  Also set the AWS_ROLE_ARN secret via gh (guarded).
+
+Flags:
+  --role-arn=<arn>      IAM role ARN for keyless Bedrock (or OPENRABBIT_AWS_ROLE_ARN).
+  --force               Overwrite existing scaffolded files when writing.
+  --aws-region=<r>      Primary region for OIDC/STS + verifier (default us-east-2).
+
+The Python layer is advisory-only and performs NO network mutation; gh calls
+happen only on the explicit `--apply` path here.
+USAGE
+    ;;
+  *)
+    echo "error: unknown subcommand '$SUBCMD' (try: gh openrabbit help)" >&2
+    exit 2
+    ;;
+esac

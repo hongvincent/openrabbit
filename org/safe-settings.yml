@@ -1,0 +1,49 @@
+# openrabbit — Safe-Settings example (PRD §11 fleet-wide governance).
+#
+# Safe-Settings (https://github.com/github/safe-settings) is a Probot app that
+# applies a declarative org config to every repo, continuously reconciling drift.
+# This is the *org-level* default config; in a real deployment it lives at
+# `.github/settings.yml` in the org's `admin` (Safe-Settings) repo and is applied
+# to all repos unless a per-repo override exists.
+#
+# What it does here: enforce consistent branch protection on each repo's default
+# branch AND require the openrabbit review status check before merge — the same
+# guarantee as the org ruleset, expressed as branch protection for orgs that
+# standardize on Safe-Settings instead of (or alongside) rulesets.
+#
+# Apply: install Safe-Settings on the org, drop this in `.github/settings.yml`.
+# The required check `context` is the EXACT name GitHub reports for the
+# openrabbit reusable-workflow job: "<caller job name> / <reusable job name>" =
+# "openrabbit / review" (the caller job is named "openrabbit", the reusable job
+# "review"). It must match org/ruleset.json. Rename either job -> update both.
+
+# Org-wide branch protection defaults applied to the default branch of every repo.
+branches:
+  - name: default
+    protection:
+      # Require the openrabbit review check (and keep the branch up to date).
+      required_status_checks:
+        strict: true
+        # New GitHub API shape: checks[].context (preferred over legacy contexts[]).
+        checks:
+          - context: openrabbit / review
+        # Legacy mirror for older Safe-Settings versions.
+        contexts:
+          - openrabbit / review
+      # Require PRs (no direct pushes) so the review check always runs.
+      required_pull_request_reviews:
+        required_approving_review_count: 0
+        dismiss_stale_reviews: false
+        require_code_owner_reviews: false
+      enforce_admins: false
+      required_linear_history: true
+      allow_force_pushes: false
+      allow_deletions: false
+      restrictions: null
+
+# Org-wide repository defaults (kept minimal; tune per policy).
+repository:
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: true
+  delete_branch_on_merge: true
