@@ -52,9 +52,9 @@ Each item = a dynamic workflow (TDD + adversarial review), then `uv run pytest`,
 
 ### Phase 4 — Enterprise (optional, gated)
 14. [x] SARIF + Check-Run adapters — DONE (iter5, commit a430eeb): `adapters/sarif.py` (SARIF 2.1.0, security-severity mapping, partialFingerprints) + `adapters/checkrun.py` (advisory-neutral default, gate-configurable, >50-annotation chunking)
-15. [ ] GitHub App mode (webhooks, installation tokens) — partial build was killed by session limit; partial artifacts REMOVED, rebuild fresh after reset
-16. [ ] Greptile-style codebase index (stdlib-ast symbol/import graph + embeddings interface, offline-safe) — not started (session limit)
-> ⏸ **SESSION LIMIT** hit during iter5 (resets ~03:20 Asia/Seoul 2026-06-15). Loop is idling (time-aware heartbeat) until reset, then resumes: rebuild 15 + 16, then 17-19, then STOP.
+15. [x] GitHub App mode — DONE (iter5b): `openrabbit/app/` (auth.py RS256 App JWT + installation-token cache via lazy PyJWT[crypto]; webhook.py HMAC-SHA256 constant-time verify + fail-closed-on-empty-secret + PR-event routing to orchestrator.review; server.py framework-free Request→Response, verify-before-parse, no web-framework dep). 63 tests, all app modules 100%.
+16. [x] Greptile-style codebase index — DONE (iter5b): `openrabbit/index/` (symbols.py: ast+regex SymbolIndex, callers_of/defined_in/impacted_by, optional lazy tree-sitter w/ stdlib fallback, parse-only never imports target; embeddings.py: Embedder iface + deterministic FakeEmbedder + lazy BedrockEmbedder stub + cosine top-k VectorStore). 44 tests.
+> ✅ Session-limit interruption resolved: item 14 committed solo (a430eeb), partial 15 removed, 15+16 rebuilt fresh post-reset. **Phase 4 complete. 826 tests, 99% cov.**
 
 ### Cross-cutting / quality gates
 17. [ ] **Dogfood eval on `smnt-agent-core`**: build golden set from merged PRs + reverts/hotfixes → run scorecard → prove **FP < 10%** at the default gate (tune prompts/threshold)

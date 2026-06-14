@@ -17,11 +17,18 @@ dependencies = [
 openrabbit = "openrabbit.cli:main"
 
 [project.optional-dependencies]
+# Optional GitHub App mode (SPEC 1.2 — Phase-4 option). RS256 App-JWT signing
+# needs PyJWT + its `crypto` extra (cryptography). Imported LAZILY inside
+# openrabbit.app.auth, so the core package imports fine WITHOUT this installed.
+app = [
+    "PyJWT[crypto]>=2.8",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pytest-mock>=3.12",
     "respx>=0.21",
+    "PyJWT[crypto]>=2.8",
 ]
 
 [build-system]
