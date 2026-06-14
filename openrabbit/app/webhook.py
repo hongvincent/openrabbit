@@ -22,8 +22,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Optional, Union
+from typing import Any, Optional, Union
 
 #: ``pull_request`` actions that should trigger a review (SPEC 6 step 1).
 REVIEW_ACTIONS: frozenset[str] = frozenset(
@@ -89,10 +90,8 @@ def verify_signature(
         return False
 
     body_bytes = body.encode("utf-8") if isinstance(body, str) else body
-    expected = hmac.new(
-        secret.encode("utf-8"), body_bytes, hashlib.sha256
-    ).hexdigest()
-    provided = sig_header[len(_SIG_PREFIX):]
+    expected = hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+    provided = sig_header[len(_SIG_PREFIX) :]
     # Constant-time compare of the two hex digests (equal length by construction
     # of `expected`; compare_digest also tolerates unequal length safely).
     return hmac.compare_digest(expected, provided)
@@ -157,7 +156,9 @@ def handle_event(
     action = data.get("action")
     if action not in REVIEW_ACTIONS:
         return WebhookResult(
-            handled=False, action="ignored", event=event,
+            handled=False,
+            action="ignored",
+            event=event,
             detail={"pr_action": action},
         )
 

@@ -74,8 +74,12 @@ def test_sarif_driver_metadata():
 def test_rules_deduped_by_rule_id():
     f1 = make_finding(rule_id="openrabbit/correctness/bounds-check", fingerprint="a")
     f2 = make_finding(rule_id="openrabbit/correctness/bounds-check", fingerprint="b")
-    f3 = make_finding(rule_id="openrabbit/security/injection", fingerprint="c",
-                      severity="critical", category="security")
+    f3 = make_finding(
+        rule_id="openrabbit/security/injection",
+        fingerprint="c",
+        severity="critical",
+        category="security",
+    )
     doc = findings_to_sarif([f1, f2, f3], tool_version="0.1", repo_root=".")
     rules = doc["runs"][0]["tool"]["driver"]["rules"]
     ids = [r["id"] for r in rules]
@@ -235,9 +239,7 @@ def test_empty_findings_produces_valid_envelope():
 # --------------------------------------------------------------------------- #
 def test_write_sarif_roundtrips(tmp_path):
     out = tmp_path / "out" / "openrabbit.sarif"
-    write_sarif(
-        out, [make_finding()], tool_version="9.9.9", repo_root="."
-    )
+    write_sarif(out, [make_finding()], tool_version="9.9.9", repo_root=".")
     assert out.exists()
     loaded = json.loads(out.read_text(encoding="utf-8"))
     assert loaded["version"] == "2.1.0"

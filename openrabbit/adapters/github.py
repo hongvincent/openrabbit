@@ -126,7 +126,7 @@ def _strip_suggestion_fence(suggestion: str) -> str:
     opener = re.match(r"^```+suggestion[ \t]*\r?\n", stripped)
     if not opener or not stripped.endswith("```"):
         return suggestion
-    inner = stripped[opener.end():]
+    inner = stripped[opener.end() :]
     inner = inner[: inner.rfind("```")]
     return inner
 
@@ -271,9 +271,7 @@ class GitHubAdapter:
 
     def fetch_changed_files(self) -> list[ChangedFile]:
         """Return the PR's changed files as :class:`ChangedFile` objects."""
-        url = self._rest_url(
-            f"/repos/{self.repo.slug}/pulls/{self.pr_number}/files"
-        )
+        url = self._rest_url(f"/repos/{self.repo.slug}/pulls/{self.pr_number}/files")
         resp = self._client().get(url, headers=self._headers())
         self._raise_for(resp, "fetch_changed_files")
         return [
@@ -315,9 +313,7 @@ class GitHubAdapter:
             "body": summary_markdown,
             "comments": comments,
         }
-        url = self._rest_url(
-            f"/repos/{self.repo.slug}/pulls/{self.pr_number}/reviews"
-        )
+        url = self._rest_url(f"/repos/{self.repo.slug}/pulls/{self.pr_number}/reviews")
         resp = self._client().post(url, headers=self._headers(), json=payload)
         self._raise_for(resp, "post_review")
         return resp.json()
@@ -349,13 +345,13 @@ class GitHubAdapter:
             url = self._rest_url(
                 f"/repos/{self.repo.slug}/issues/{self.pr_number}/comments"
             )
-            resp = self._client().post(url, headers=self._headers(), json={"body": body})
+            resp = self._client().post(
+                url, headers=self._headers(), json={"body": body}
+            )
             self._raise_for(resp, "create_sticky_walkthrough")
             return resp.json()
         comment_id = existing["id"]
-        url = self._rest_url(
-            f"/repos/{self.repo.slug}/issues/comments/{comment_id}"
-        )
+        url = self._rest_url(f"/repos/{self.repo.slug}/issues/comments/{comment_id}")
         resp = self._client().patch(url, headers=self._headers(), json={"body": body})
         self._raise_for(resp, "update_sticky_walkthrough")
         return resp.json()
@@ -370,9 +366,7 @@ class GitHubAdapter:
         self._raise_for(resp, "graphql")
         data = resp.json()
         if data.get("errors"):
-            messages = "; ".join(
-                e.get("message", str(e)) for e in data["errors"]
-            )
+            messages = "; ".join(e.get("message", str(e)) for e in data["errors"])
             raise GitHubError(f"graphql errors: {messages}")
         return data.get("data", {})
 
@@ -394,9 +388,7 @@ class GitHubAdapter:
             " minimizeComment(input: {subjectId: $subjectId, classifier: $classifier})"
             " { minimizedComment { isMinimized minimizedReason } } }"
         )
-        data = self._graphql(
-            query, {"subjectId": subject_id, "classifier": classifier}
-        )
+        data = self._graphql(query, {"subjectId": subject_id, "classifier": classifier})
         minimized = (data.get("minimizeComment") or {}).get("minimizedComment") or {}
         return bool(minimized.get("isMinimized", True))
 
@@ -429,12 +421,9 @@ class GitHubAdapter:
                     "cursor": cursor,
                 },
             )
-            container = (
-                ((data.get("repository") or {}).get("pullRequest") or {}).get(
-                    "reviewThreads"
-                )
-                or {}
-            )
+            container = ((data.get("repository") or {}).get("pullRequest") or {}).get(
+                "reviewThreads"
+            ) or {}
             for node in container.get("nodes", []):
                 parsed = self._parse_thread(node)
                 if parsed is None:
@@ -493,7 +482,5 @@ class GitHubAdapter:
         return [
             t
             for t in posted_threads
-            if t.fingerprint
-            and not t.is_resolved
-            and t.fingerprint not in current
+            if t.fingerprint and not t.is_resolved and t.fingerprint not in current
         ]

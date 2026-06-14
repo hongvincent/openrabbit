@@ -53,8 +53,9 @@ config + providers (and, for the App, an installation-token-backed GitHub client
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Union
+from typing import Any, Union
 
 from openrabbit.app.webhook import handle_event, verify_signature
 
@@ -134,7 +135,7 @@ def handle_request(
     except KeyError:
         # Missing review dep is a server misconfiguration, not client input.
         raise
-    except Exception:  # noqa: BLE001 - contain reviewer/provider failures
+    except Exception:
         return _json_response(500, {"error": "internal error"})
 
     if not result.handled:

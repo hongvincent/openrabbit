@@ -37,9 +37,7 @@ def test_learning_close_tag_is_neutralized_in_prefix():
 
 
 def test_pr_title_and_body_close_tags_are_neutralized():
-    prefix = context.build_prefix(
-        _config(), {"title": _ATTACK, "body": _ATTACK}
-    )
+    prefix = context.build_prefix(_config(), {"title": _ATTACK, "body": _ATTACK})
     _fence_escaped(prefix)  # one real <pr> fence close
 
 

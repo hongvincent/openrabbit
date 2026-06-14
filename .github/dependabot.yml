@@ -1,0 +1,46 @@
+# openrabbit — Dependabot (PRD §11 "Fleet sync" / §12 supply chain, item 19).
+#
+# Two ecosystems:
+#   * github-actions — bump the SHA-pinned action versions across every workflow
+#     (ci.yml, reusable-workflow.yml, scorecard.yml) + the composite action so a
+#     single central pin bump rolls the fleet forward (SPEC §11). Dependabot
+#     rewrites the pinned SHA *and* the trailing `# vX` version comment.
+#   * pip — bump the Python dependencies declared in pyproject.toml (uv reads the
+#     same PEP 621 [project] table, so the "pip" ecosystem covers uv projects).
+#
+# Schedule is weekly to keep noise low; security updates still arrive promptly.
+version: 2
+updates:
+  # --- GitHub Actions: bump pinned SHAs in all workflows + composite action ---
+  - package-ecosystem: "github-actions"
+    # "/" makes Dependabot scan every workflow under .github/workflows/.
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      # One PR per week for all action bumps keeps the fleet-sync diff reviewable.
+      github-actions:
+        patterns:
+          - "*"
+
+  # --- Python deps (pyproject.toml / uv): pip ecosystem covers PEP 621 ---
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      python:
+        patterns:
+          - "*"

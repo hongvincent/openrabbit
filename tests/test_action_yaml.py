@@ -120,9 +120,12 @@ def test_onboarding_refs_point_at_existing_reusable_workflow_path() -> None:
     assert rel in REUSABLE_WORKFLOW_REF, (
         f"init REUSABLE_WORKFLOW_REF must use {rel}: {REUSABLE_WORKFLOW_REF}"
     )
-    template_text = (REPO_ROOT / "org" / ".github" / "workflow-templates"
-                     / "openrabbit.yml").read_text(encoding="utf-8")
-    assert rel in template_text, "org template must reference the .github/workflows/ path"
+    template_text = (
+        REPO_ROOT / "org" / ".github" / "workflow-templates" / "openrabbit.yml"
+    ).read_text(encoding="utf-8")
+    assert rel in template_text, (
+        "org template must reference the .github/workflows/ path"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -296,5 +299,7 @@ def test_reusable_declares_workflow_call_inputs_and_secrets(
     secrets = wc.get("secrets") or {}
     # region + config path are tunable inputs; the AWS role ARN is a secret.
     assert "config" in inputs, "workflow_call must expose a `config` input"
-    assert any("region" in k for k in inputs), "workflow_call must expose a region input"
+    assert any("region" in k for k in inputs), (
+        "workflow_call must expose a region input"
+    )
     assert secrets, "workflow_call must declare secrets (AWS role ARN)"

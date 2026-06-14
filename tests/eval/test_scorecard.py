@@ -94,7 +94,9 @@ def test_compute_scorecard_overall_counts():
     assert sc.overall.tp == 2
     assert sc.overall.fp == 1
     assert sc.overall.fn == 1
-    assert sc.total_findings == 3  # match + false-positive (miss is not an emitted finding)
+    assert (
+        sc.total_findings == 3
+    )  # match + false-positive (miss is not an emitted finding)
 
 
 def test_false_positive_rate_uses_controls_as_true_negatives():
@@ -121,7 +123,7 @@ def test_overall_fail_when_over_budget():
 
 
 def test_default_fp_budget_value():
-    assert DEFAULT_FP_BUDGET == pytest.approx(0.10)
+    assert pytest.approx(0.10) == DEFAULT_FP_BUDGET
 
 
 # --------------------------------------------------------------------------- #
@@ -149,7 +151,10 @@ def test_addressed_rate_zero_when_no_emitted_findings():
 # serialization + pretty print                                                #
 # --------------------------------------------------------------------------- #
 def test_scorecard_to_dict_roundtrips_json():
-    graded = [_gf("correctness", "match", addressed=True), _gf("security", "false-positive")]
+    graded = [
+        _gf("correctness", "match", addressed=True),
+        _gf("security", "false-positive"),
+    ]
     sc = compute_scorecard(graded, control_count=4, fp_budget=0.10)
     d = sc.to_dict()
     # json-serializable

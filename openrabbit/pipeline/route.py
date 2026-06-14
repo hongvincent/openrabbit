@@ -139,7 +139,9 @@ def _assess_risk(file_type: str, security_sensitive: bool) -> str:
     return "low"
 
 
-def _assign_lenses(file_type: str, security_sensitive: bool, available: list[str]) -> list[str]:
+def _assign_lenses(
+    file_type: str, security_sensitive: bool, available: list[str]
+) -> list[str]:
     """Pick which configured lenses run on this file.
 
     Docs/lockfile/generated files get nothing. Tests get correctness +
@@ -151,7 +153,11 @@ def _assign_lenses(file_type: str, security_sensitive: bool, available: list[str
 
     avail = list(available)
     if file_type == "test":
-        chosen = [l for l in avail if l in ("correctness", "tests", "maintainability")]
+        chosen = [
+            lens
+            for lens in avail
+            if lens in ("correctness", "tests", "maintainability")
+        ]
     elif file_type in ("frontend", "infra", "migration"):
         chosen = list(avail)
     else:  # code
@@ -160,8 +166,8 @@ def _assign_lenses(file_type: str, security_sensitive: bool, available: list[str
     if security_sensitive and "security" in avail and "security" not in chosen:
         chosen.append("security")
     # Preserve the configured order.
-    order = {l: i for i, l in enumerate(avail)}
-    return sorted(set(chosen), key=lambda l: order.get(l, len(order)))
+    order = {lens: i for i, lens in enumerate(avail)}
+    return sorted(set(chosen), key=lambda lens: order.get(lens, len(order)))
 
 
 def _model_role_for(risk: str) -> str:

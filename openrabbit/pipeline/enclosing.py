@@ -135,9 +135,7 @@ class GitEnclosingFetcher:
     # ------------------------------------------------------------------ #
     # block extraction (pure given file lines)                            #
     # ------------------------------------------------------------------ #
-    def _extract_block(
-        self, lines: list[str], hunk: Hunk
-    ) -> Optional[tuple[int, int]]:
+    def _extract_block(self, lines: list[str], hunk: Hunk) -> Optional[tuple[int, int]]:
         """Compute a (start, end) 0-based inclusive line span for one hunk."""
         rng = _HUNK_RANGE_RE.match(hunk.header)
         if rng is None:
@@ -147,7 +145,9 @@ class GitEnclosingFetcher:
         # Convert to 0-based, clamp into range. A length-0 hunk (pure deletion)
         # still anchors a useful window at the deletion point.
         hunk_start = max(0, start_1 - 1)
-        hunk_end = min(len(lines) - 1, max(hunk_start, start_1 - 1 + max(length, 1) - 1))
+        hunk_end = min(
+            len(lines) - 1, max(hunk_start, start_1 - 1 + max(length, 1) - 1)
+        )
 
         enclosing = self._find_enclosing_scope(lines, hunk_start)
         if enclosing is not None:
@@ -217,9 +217,7 @@ class GitEnclosingFetcher:
             end = j
         return end
 
-    def _render_block(
-        self, path: str, lines: list[str], start: int, end: int
-    ) -> str:
+    def _render_block(self, path: str, lines: list[str], start: int, end: int) -> str:
         header = f"# {path}:{start + 1}-{end + 1} (enclosing context)"
         body = lines[start : end + 1]
         return "\n".join([header, *body])

@@ -17,6 +17,7 @@ later; the goal is an order-of-magnitude cost signal in CI, not billing.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -94,7 +95,14 @@ PRICE_TABLE: dict[str, ModelPrice] = {
 #: Cross-region inference-profile prefixes that wrap a base model id. A profile
 #: id like ``us.openai.gpt-5.5`` or ``global.anthropic.claude-...`` prices the
 #: same as its bare base model, so we strip these before the table lookup.
-_PROFILE_PREFIXES: tuple[str, ...] = ("us.", "use1.", "use2.", "apac.", "eu.", "global.")
+_PROFILE_PREFIXES: tuple[str, ...] = (
+    "us.",
+    "use1.",
+    "use2.",
+    "apac.",
+    "eu.",
+    "global.",
+)
 
 
 def lookup_price(model: str) -> Optional[ModelPrice]:
@@ -158,7 +166,7 @@ class CostSummary:
         *,
         model: Optional[str] = None,
         calls: int = 0,
-    ) -> "CostSummary":
+    ) -> CostSummary:
         """Build a summary from a (typically aggregated) :class:`Usage`.
 
         When ``model`` is priced, attach a USD estimate; otherwise leave it
@@ -173,6 +181,44 @@ class CostSummary:
             calls=calls,
             model=model,
             usd_estimate=usd,
+        )
+
+    @classmethod
+    def from_role_usages(
+        cls,
+        role_usages: Iterable[tuple[Optional[str], Usage]],
+        *,
+        calls: int = 0,
+    ) -> CostSummary:
+        """Build a summary pricing each ``(model, usage)`` at *its own* rate.
+
+        A review touches multiple model roles (Nova finder vs. GPT-5.5 verifier)
+        whose per-token prices differ sharply. Summing all tokens and pricing
+        them at a single model's rate understates (or overstates) the bill — so
+        each role's :class:`Usage` is priced at its own model's rate and the
+        per-role dollar figures are summed (SPEC 7.3, item 1).
+
+        Token totals are the aggregate across every role. The USD estimate is the
+        sum of the *priced* roles' costs; unpriced (or model-less) roles still
+        contribute their tokens but no dollars. When no role is priced the
+        estimate is ``None`` (token totals still carry the signal). ``model`` is
+        left ``None`` because the summary spans multiple models.
+        """
+        total_usage = Usage()
+        total_usd: Optional[float] = None
+        for model, usage in role_usages:
+            total_usage = total_usage + usage
+            cost = estimate_cost_for_model(usage, model) if model else None
+            if cost is not None:
+                total_usd = cost if total_usd is None else total_usd + cost
+        return cls(
+            input_tokens=total_usage.input_tokens,
+            output_tokens=total_usage.output_tokens,
+            cache_read=total_usage.cache_read,
+            cache_write=total_usage.cache_write,
+            calls=calls,
+            model=None,
+            usd_estimate=total_usd,
         )
 
     def to_dict(self) -> dict[str, Any]:

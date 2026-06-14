@@ -22,9 +22,7 @@ from openrabbit.eval.golden_set import (
     write_jsonl,
 )
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("git") is None, reason="git not available"
-)
+pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
 
 
 def _git(repo: Path, *args: str) -> str:

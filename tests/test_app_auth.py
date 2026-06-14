@@ -152,7 +152,7 @@ class _Recorder:
         self.json_body: dict | None = None
         self.calls = 0
 
-    def post(self, url, *, headers=None, json=None, **kwargs):  # noqa: A002
+    def post(self, url, *, headers=None, json=None, **kwargs):
         self.calls += 1
         self.url = url
         self.headers = headers
@@ -173,7 +173,7 @@ def _install_fake_httpx(monkeypatch, recorder: _Recorder) -> None:
         def __exit__(self, *exc):
             return False
 
-        def post(self, url, *, headers=None, json=None, **kwargs):  # noqa: A002
+        def post(self, url, *, headers=None, json=None, **kwargs):
             return recorder.post(url, headers=headers, json=json, **kwargs)
 
     monkeypatch.setattr(httpx, "Client", _FakeClient)
@@ -200,9 +200,7 @@ def test_installation_token_exchange(monkeypatch, private_pem):
 def test_installation_token_custom_api_base(monkeypatch, private_pem):
     rec = _Recorder({"token": "ghs_x", "expires_at": "2026-06-15T01:00:00Z"})
     _install_fake_httpx(monkeypatch, rec)
-    installation_token(
-        "1", private_pem, 7, api_base="https://ghe.example.com/api/v3"
-    )
+    installation_token("1", private_pem, 7, api_base="https://ghe.example.com/api/v3")
     assert rec.url == (
         "https://ghe.example.com/api/v3/app/installations/7/access_tokens"
     )
@@ -226,9 +224,7 @@ def test_installation_token_missing_token_field_raises(monkeypatch, private_pem)
 # InstallationTokenCache — cache + refresh                                     #
 # --------------------------------------------------------------------------- #
 def test_cache_fetches_once_then_reuses(monkeypatch, private_pem):
-    rec = _Recorder(
-        {"token": "ghs_cached", "expires_at": "2999-01-01T00:00:00Z"}
-    )
+    rec = _Recorder({"token": "ghs_cached", "expires_at": "2999-01-01T00:00:00Z"})
     _install_fake_httpx(monkeypatch, rec)
 
     cache = InstallationTokenCache("1", private_pem)
@@ -241,9 +237,7 @@ def test_cache_fetches_once_then_reuses(monkeypatch, private_pem):
 
 def test_cache_refreshes_when_expired(monkeypatch, private_pem):
     # An already-expired token forces a refresh on the next get().
-    rec = _Recorder(
-        {"token": "ghs_expired", "expires_at": "2000-01-01T00:00:00Z"}
-    )
+    rec = _Recorder({"token": "ghs_expired", "expires_at": "2000-01-01T00:00:00Z"})
     _install_fake_httpx(monkeypatch, rec)
 
     cache = InstallationTokenCache("1", private_pem)
@@ -253,9 +247,7 @@ def test_cache_refreshes_when_expired(monkeypatch, private_pem):
 
 
 def test_cache_keys_by_installation(monkeypatch, private_pem):
-    rec = _Recorder(
-        {"token": "ghs_a", "expires_at": "2999-01-01T00:00:00Z"}
-    )
+    rec = _Recorder({"token": "ghs_a", "expires_at": "2999-01-01T00:00:00Z"})
     _install_fake_httpx(monkeypatch, rec)
     cache = InstallationTokenCache("1", private_pem)
     cache.get(1)
@@ -265,9 +257,7 @@ def test_cache_keys_by_installation(monkeypatch, private_pem):
 
 
 def test_cache_force_refresh(monkeypatch, private_pem):
-    rec = _Recorder(
-        {"token": "ghs_force", "expires_at": "2999-01-01T00:00:00Z"}
-    )
+    rec = _Recorder({"token": "ghs_force", "expires_at": "2999-01-01T00:00:00Z"})
     _install_fake_httpx(monkeypatch, rec)
     cache = InstallationTokenCache("1", private_pem)
     cache.get(1)

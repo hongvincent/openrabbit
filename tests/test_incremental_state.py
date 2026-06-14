@@ -26,7 +26,6 @@ from openrabbit.pipeline import gate as gate_mod
 from openrabbit.pipeline import orchestrator as orch_mod
 from openrabbit.providers.base import FakeProvider
 
-
 # --------------------------------------------------------------------------- #
 # Fixtures / sample data                                                       #
 # --------------------------------------------------------------------------- #
@@ -129,7 +128,11 @@ def _one_security_finding():
         [
             _emit_findings_result([]),  # correctness lens: nothing
             _emit_findings_result(
-                [_finder_finding("src/api/auth.py", "openrabbit/security/sqli", 95, "security")]
+                [
+                    _finder_finding(
+                        "src/api/auth.py", "openrabbit/security/sqli", 95, "security"
+                    )
+                ]
             ),
         ]
     )
@@ -198,7 +201,12 @@ class TestStateStoreFingerprints:
         path = tmp_path / "state.json"
         path.write_text(
             json.dumps(
-                {"acme/repo#7": {"last_reviewed_sha": "s", "posted_fingerprints": "abc"}}
+                {
+                    "acme/repo#7": {
+                        "last_reviewed_sha": "s",
+                        "posted_fingerprints": "abc",
+                    }
+                }
             ),
             encoding="utf-8",
         )
@@ -279,7 +287,10 @@ class TestOrchestratorPersistedDedup:
         result = orch_mod.review(
             config,
             pr_context=dict(self.PR),
-            providers={"finder": _one_security_finding(), "verifier": FakeProvider([_verify_result(0.95)])},
+            providers={
+                "finder": _one_security_finding(),
+                "verifier": FakeProvider([_verify_result(0.95)]),
+            },
             store=store,
         )
         assert result.reviewed is True
@@ -294,7 +305,10 @@ class TestOrchestratorPersistedDedup:
         first = orch_mod.review(
             config,
             pr_context=dict(self.PR),
-            providers={"finder": _one_security_finding(), "verifier": FakeProvider([_verify_result(0.95)])},
+            providers={
+                "finder": _one_security_finding(),
+                "verifier": FakeProvider([_verify_result(0.95)]),
+            },
             store=store,
         )
         assert len(first.findings) == 1
@@ -307,7 +321,10 @@ class TestOrchestratorPersistedDedup:
         second = orch_mod.review(
             config,
             pr_context=pr2,
-            providers={"finder": _one_security_finding(), "verifier": FakeProvider([_verify_result(0.95)])},
+            providers={
+                "finder": _one_security_finding(),
+                "verifier": FakeProvider([_verify_result(0.95)]),
+            },
             store=store,
         )
         assert second.reviewed is True
@@ -322,7 +339,10 @@ class TestOrchestratorPersistedDedup:
         first = orch_mod.review(
             config,
             pr_context=dict(self.PR),
-            providers={"finder": _one_security_finding(), "verifier": FakeProvider([_verify_result(0.95)])},
+            providers={
+                "finder": _one_security_finding(),
+                "verifier": FakeProvider([_verify_result(0.95)]),
+            },
             store=store,
         )
         fp = first.findings[0].fingerprint
@@ -334,7 +354,10 @@ class TestOrchestratorPersistedDedup:
         second = orch_mod.review(
             config,
             pr_context=pr2,
-            providers={"finder": _one_security_finding(), "verifier": FakeProvider([_verify_result(0.95)])},
+            providers={
+                "finder": _one_security_finding(),
+                "verifier": FakeProvider([_verify_result(0.95)]),
+            },
             store=store2,
             prior_fingerprints={fp},
         )
@@ -348,7 +371,10 @@ class TestOrchestratorPersistedDedup:
         result = orch_mod.review(
             config,
             pr_context=dict(self.PR),
-            providers={"finder": _one_security_finding(), "verifier": FakeProvider([_verify_result(0.95)])},
+            providers={
+                "finder": _one_security_finding(),
+                "verifier": FakeProvider([_verify_result(0.95)]),
+            },
             store=store,
         )
         assert len(result.findings) == 1
@@ -361,7 +387,10 @@ class TestOrchestratorPersistedDedup:
         result = orch_mod.review(
             config,
             pr_context={"draft": False, "state": "open", "diff": SAMPLE_DIFF},
-            providers={"finder": _one_security_finding(), "verifier": FakeProvider([_verify_result(0.95)])},
+            providers={
+                "finder": _one_security_finding(),
+                "verifier": FakeProvider([_verify_result(0.95)]),
+            },
         )
         assert result.reviewed is True
         assert len(result.findings) == 1
@@ -375,7 +404,10 @@ class TestOrchestratorPersistedDedup:
         result = orch_mod.review(
             config,
             pr_context=pr,
-            providers={"finder": _one_security_finding(), "verifier": FakeProvider([_verify_result(0.95)])},
+            providers={
+                "finder": _one_security_finding(),
+                "verifier": FakeProvider([_verify_result(0.95)]),
+            },
             store=store,
         )
         assert result.reviewed is True

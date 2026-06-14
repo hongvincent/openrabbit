@@ -219,19 +219,22 @@ def test_marketplace_lists_openrabbit_plugin(marketplace):
 
 
 def test_marketplace_openrabbit_entry_has_source(marketplace):
-    entry = next(
-        p for p in marketplace["plugins"] if p.get("name") == "openrabbit"
-    )
+    entry = next(p for p in marketplace["plugins"] if p.get("name") == "openrabbit")
     assert "source" in entry
     source = entry["source"]
     # A git source with a pinnable ref. Either a string URL or a
     # ``{source:"git", ...}`` object carrying a ref/tag/branch handle.
     if isinstance(source, dict):
-        assert source.get("source") == "git" or source.get("type") == "git" or source.get("url") or source.get("repo")
+        assert (
+            source.get("source") == "git"
+            or source.get("type") == "git"
+            or source.get("url")
+            or source.get("repo")
+        )
         # A pinnable ref handle should be present (ref/tag/branch/commit).
-        assert any(
-            k in source for k in ("ref", "tag", "branch", "commit", "rev")
-        ), f"git source has no pinnable ref: {source}"
+        assert any(k in source for k in ("ref", "tag", "branch", "commit", "rev")), (
+            f"git source has no pinnable ref: {source}"
+        )
     else:
         assert isinstance(source, str) and source.strip()
 

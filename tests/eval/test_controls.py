@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from openrabbit.eval.controls import (
     ControlSample,
     generate_noop_controls,
@@ -36,22 +34,12 @@ def test_whitespace_control_diff_only_changes_whitespace(tmp_path):
 
 
 def test_is_noop_diff_detects_real_change():
-    real = (
-        "@@ -1,2 +1,2 @@\n"
-        " def f():\n"
-        "-    return 1\n"
-        "+    return 2\n"
-    )
+    real = "@@ -1,2 +1,2 @@\n def f():\n-    return 1\n+    return 2\n"
     assert is_noop_diff(real) is False
 
 
 def test_is_noop_diff_whitespace_only_is_noop():
-    noop = (
-        "@@ -1,2 +1,2 @@\n"
-        " def f():\n"
-        "-    return 1\n"
-        "+    return 1  \n"
-    )
+    noop = "@@ -1,2 +1,2 @@\n def f():\n-    return 1\n+    return 1  \n"
     assert is_noop_diff(noop) is True
 
 

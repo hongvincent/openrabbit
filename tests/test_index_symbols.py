@@ -48,11 +48,7 @@ def pkg(tmp_path: Path) -> Path:
     )
 
     (root / "pkg" / "service.py").write_text(
-        "from pkg.util import add\n"
-        "\n"
-        "\n"
-        "def compute(x):\n"
-        "    return add(x, 10)\n"
+        "from pkg.util import add\n\n\ndef compute(x):\n    return add(x, 10)\n"
     )
 
     (root / "pkg" / "api.py").write_text(
@@ -216,11 +212,11 @@ def test_regex_backend_go_imports_and_types(tmp_path: Path) -> None:
     go.write_text(
         "package main\n"
         "\n"
-        'import (\n'
+        "import (\n"
         '    "fmt"\n'
         '    "net/http"\n'
         ")\n"
-        '\n'
+        "\n"
         'import "os"\n'
         "\n"
         "type Server struct {\n"

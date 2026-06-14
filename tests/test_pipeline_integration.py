@@ -21,8 +21,6 @@ from openrabbit.domain import (
     Usage,
 )
 from openrabbit.findings import Finding, compute_fingerprint
-from openrabbit.providers.base import FakeProvider
-
 from openrabbit.pipeline import context as ctx_mod
 from openrabbit.pipeline import dedup as dedup_mod
 from openrabbit.pipeline import emit as emit_mod
@@ -31,7 +29,7 @@ from openrabbit.pipeline import orchestrator as orch_mod
 from openrabbit.pipeline import route as route_mod
 from openrabbit.pipeline import run_lenses as run_lenses_mod
 from openrabbit.pipeline import verify as verify_mod
-
+from openrabbit.providers.base import FakeProvider
 
 # --------------------------------------------------------------------------- #
 # Fixtures / sample data                                                       #
@@ -187,13 +185,13 @@ class TestGate:
             LOCKFILE_ONLY_DIFF,
         )
         assert decision.should_review is False
-        assert "lockfile" in decision.reason.lower() or "generated" in decision.reason.lower()
+        assert (
+            "lockfile" in decision.reason.lower()
+            or "generated" in decision.reason.lower()
+        )
 
     def test_skip_trivial(self, config):
-        tiny = (
-            "diff --git a/x.py b/x.py\n"
-            "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n"
-        )
+        tiny = "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n"
         decision = gate_mod.evaluate_gate(
             config,
             {"draft": False, "state": "open", "head_sha": "abc"},
@@ -209,7 +207,13 @@ class TestGate:
         store.record_review("acme/repo", 7, "abc123")
         decision = gate_mod.evaluate_gate(
             config,
-            {"draft": False, "state": "open", "head_sha": "abc123", "repo": "acme/repo", "number": 7},
+            {
+                "draft": False,
+                "state": "open",
+                "head_sha": "abc123",
+                "repo": "acme/repo",
+                "number": 7,
+            },
             SAMPLE_DIFF,
             store=store,
         )
@@ -261,7 +265,10 @@ class TestRoute:
         plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness", "security"])
         by_path = {f.path: f for f in plan.files}
         # Docs files shouldn't get a heavy correctness/security pass.
-        assert by_path["README.md"].lenses == [] or "security" not in by_path["README.md"].lenses
+        assert (
+            by_path["README.md"].lenses == []
+            or "security" not in by_path["README.md"].lenses
+        )
 
     def test_hunks_have_content(self):
         plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness"])
@@ -275,8 +282,6 @@ class TestRoute:
 # --------------------------------------------------------------------------- #
 class TestContext:
     def test_byte_stable_prefix(self, config):
-        plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness", "security"])
-        pf = next(f for f in plan.files if f.path == "src/api/auth.py")
         a = ctx_mod.build_prefix(config, pr_context={"title": "T", "body": "B"})
         b = ctx_mod.build_prefix(config, pr_context={"title": "T", "body": "B"})
         assert a == b  # deterministic / byte-stable
@@ -305,10 +310,24 @@ class TestRunLenses:
         finder = FakeProvider(
             [
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/security/sqli", 90, "security")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/security/sqli",
+                            90,
+                            "security",
+                        )
+                    ]
                 ),
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/correctness/x", 70, "correctness")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/correctness/x",
+                            70,
+                            "correctness",
+                        )
+                    ]
                 ),
             ]
         )
@@ -348,7 +367,11 @@ class TestRunLenses:
 
         def _git(*args: str) -> None:
             subprocess.run(
-                ["git", *args], cwd=str(repo), check=True, capture_output=True, text=True
+                ["git", *args],
+                cwd=str(repo),
+                check=True,
+                capture_output=True,
+                text=True,
             )
 
         _git("init", "-q")
@@ -662,10 +685,24 @@ class TestOrchestratorEndToEnd:
         finder = FakeProvider(
             [
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/correctness/x", 70, "correctness")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/correctness/x",
+                            70,
+                            "correctness",
+                        )
+                    ]
                 ),
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/security/sqli", 90, "security")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/security/sqli",
+                            90,
+                            "security",
+                        )
+                    ]
                 ),
             ]
         )
@@ -705,9 +742,7 @@ class TestOrchestratorEndToEnd:
             captured.append(file_plan.path)
             return f"# context for {file_plan.path}\nENCLOSED-MARKER"
 
-        finder = FakeProvider(
-            [_emit_findings_result([]), _emit_findings_result([])]
-        )
+        finder = FakeProvider([_emit_findings_result([]), _emit_findings_result([])])
         verifier = FakeProvider([])
         result = orch_mod.review(
             config,
@@ -753,10 +788,24 @@ class TestOrchestratorEndToEnd:
         finder = FakeProvider(
             [
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/correctness/x", 70, "correctness")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/correctness/x",
+                            70,
+                            "correctness",
+                        )
+                    ]
                 ),
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/security/sqli", 90, "security")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/security/sqli",
+                            90,
+                            "security",
+                        )
+                    ]
                 ),
             ]
         )
@@ -779,9 +828,7 @@ class TestOrchestratorEndToEnd:
     def test_default_lens_prompts_loaded_from_shipped_skills(self, config):
         """When the caller omits lens_prompts, the spine loads the packaged
         SKILL.md rubric (not the one-line stub) into the finder system prompt."""
-        finder = FakeProvider(
-            [_emit_findings_result([]), _emit_findings_result([])]
-        )
+        finder = FakeProvider([_emit_findings_result([]), _emit_findings_result([])])
         verifier = FakeProvider([])
         orch_mod.review(
             config,
@@ -945,10 +992,24 @@ class TestCostTelemetry:
         finder = FakeProvider(
             [
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/correctness/x", 90, "correctness")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/correctness/x",
+                            90,
+                            "correctness",
+                        )
+                    ]
                 ),
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/security/sqli", 90, "security")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/security/sqli",
+                            90,
+                            "security",
+                        )
+                    ]
                 ),
             ]
         )
@@ -996,9 +1057,7 @@ class TestCostTelemetry:
 
     def test_cost_summary_has_dollar_estimate_for_priced_finder(self, config):
         # The finder model (amazon.nova-pro) is priced, so a $ estimate appears.
-        finder = FakeProvider(
-            [_emit_findings_result([]), _emit_findings_result([])]
-        )
+        finder = FakeProvider([_emit_findings_result([]), _emit_findings_result([])])
         verifier = FakeProvider([])
         result = orch_mod.review(
             config,
@@ -1012,6 +1071,70 @@ class TestCostTelemetry:
         )
         # Finder is amazon.nova-pro-v1:0 in the config -> priced.
         assert result.cost_summary.usd_estimate is not None
+
+    def test_cost_priced_per_role_at_each_models_own_rate(self, config):
+        # Item 1: each role's Usage is priced at ITS OWN model rate, then summed.
+        # The verifier (gpt-5.5) is pricier than the finder (nova-pro); pricing
+        # the verifier's tokens at the finder rate would understate the total.
+        from openrabbit import pricing
+        from openrabbit.domain import Usage
+
+        # 2 finder lens calls @ (100 in, 50 out) each = (200, 100).
+        finder = FakeProvider(
+            [
+                _emit_findings_result(
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/correctness/x",
+                            90,
+                            "correctness",
+                        )
+                    ]
+                ),
+                _emit_findings_result(
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/security/sqli",
+                            90,
+                            "security",
+                        )
+                    ]
+                ),
+            ]
+        )
+        # 1 verifier batch call @ (80 in, 20 out).
+        verifier = FakeProvider(
+            [_verify_batch_result([(0, True, 0.95), (1, True, 0.92)])]
+        )
+        result = orch_mod.review(
+            config,
+            pr_context={
+                "draft": False,
+                "state": "open",
+                "head_sha": "abc",
+                "repo": "acme/repo",
+                "number": 7,
+                "diff": SAMPLE_DIFF,
+            },
+            providers={"finder": finder, "verifier": verifier},
+        )
+
+        finder_usage = Usage(input_tokens=200, output_tokens=100)
+        verifier_usage = Usage(input_tokens=80, output_tokens=20)
+        expected = pricing.estimate_cost_for_model(
+            finder_usage, "amazon.nova-pro-v1:0"
+        ) + pricing.estimate_cost_for_model(verifier_usage, "openai.gpt-5.5")
+
+        assert result.cost_summary.usd_estimate == pytest.approx(expected)
+
+        # A naive single-rate (everything at the finder rate) would be cheaper —
+        # prove the per-role split actually adds the more-expensive verifier rate.
+        naive = pricing.estimate_cost_for_model(
+            finder_usage + verifier_usage, "amazon.nova-pro-v1:0"
+        )
+        assert result.cost_summary.usd_estimate > naive
 
 
 # --------------------------------------------------------------------------- #
@@ -1118,7 +1241,9 @@ class TestCliOffline:
         monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
         diff_path = tmp_path / "pr.diff"
         diff_path.write_text(SAMPLE_DIFF, encoding="utf-8")
-        rc = cli.main(["review", "--offline", "--diff", str(diff_path), "--fixtures", "demo"])
+        rc = cli.main(
+            ["review", "--offline", "--diff", str(diff_path), "--fixtures", "demo"]
+        )
         assert rc == 0
 
     def test_offline_without_fixtures_emits_no_findings(self, tmp_path, capsys):
@@ -1163,6 +1288,68 @@ class TestCliOffline:
         monkeypatch.setattr("sys.stdin", io.StringIO(""))
         with pytest.raises(SystemExit):
             cli.main(["review", "--offline"])
+
+    def test_offline_surfaces_soft_model_role_warning(self, tmp_path, capsys):
+        # Item 2: a config with a SOFT model_roles warning (off-allow-list Nova
+        # region) must print a warning to stderr on `review` without failing.
+        from openrabbit import cli
+
+        diff_path = tmp_path / "pr.diff"
+        diff_path.write_text(SAMPLE_DIFF, encoding="utf-8")
+        cfg_path = tmp_path / ".openrabbit.yaml"
+        cfg_path.write_text(
+            "version: 1\nreview:\n  lenses: [correctness, security]\n"
+            "model_roles:\n"
+            "  finder: {model: amazon.nova-pro-v1:0, region: eu-west-3}\n",
+            encoding="utf-8",
+        )
+        rc = cli.main(
+            [
+                "review",
+                "--offline",
+                "--diff",
+                str(diff_path),
+                "--config",
+                str(cfg_path),
+                "--fixtures",
+                "demo",
+            ]
+        )
+        # Soft warning does NOT fail the command.
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "warning" in err.lower()
+        assert "eu-west-3" in err
+        assert "finder" in err
+
+    def test_offline_clean_config_emits_no_warning(self, tmp_path, capsys):
+        # A clean config (in-allow-list regions) prints no model-role warning.
+        from openrabbit import cli
+
+        diff_path = tmp_path / "pr.diff"
+        diff_path.write_text(SAMPLE_DIFF, encoding="utf-8")
+        cfg_path = tmp_path / ".openrabbit.yaml"
+        cfg_path.write_text(
+            "version: 1\nreview:\n  lenses: [correctness, security]\n"
+            "model_roles:\n"
+            "  finder: {model: amazon.nova-pro-v1:0, region: ap-northeast-2}\n",
+            encoding="utf-8",
+        )
+        rc = cli.main(
+            [
+                "review",
+                "--offline",
+                "--diff",
+                str(diff_path),
+                "--config",
+                str(cfg_path),
+                "--fixtures",
+                "demo",
+            ]
+        )
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "model_roles" not in err
 
     def test_offline_output_includes_cost_summary(self, tmp_path, capsys):
         # The per-PR cost telemetry (SPEC 7.3) is surfaced in the JSON output
@@ -1215,7 +1402,21 @@ class _FakeGitHubClient:
     def post(self, url, headers=None, json=None):
         self.posts.append((url, json))
         if "graphql" in url:
-            return _Resp(200, {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}}})
+            return _Resp(
+                200,
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {
+                                    "nodes": [],
+                                    "pageInfo": {"hasNextPage": False},
+                                }
+                            }
+                        }
+                    }
+                },
+            )
         if url.endswith("/reviews"):
             return _Resp(200, {"id": 1})
         return _Resp(200, {"id": 2})
@@ -1244,7 +1445,7 @@ class TestCliOnline:
 
     def test_online_review_with_fakes(self, monkeypatch, capsys, tmp_path):
         from openrabbit import cli
-        from openrabbit.adapters.github import GitHubAdapter, GitHubRepo
+        from openrabbit.adapters.github import GitHubAdapter
 
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
         cfg_path = tmp_path / ".openrabbit.yaml"
@@ -1268,10 +1469,24 @@ class TestCliOnline:
         finder = FakeProvider(
             [
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/correctness/x", 70, "correctness")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/correctness/x",
+                            70,
+                            "correctness",
+                        )
+                    ]
                 ),
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/security/sqli", 90, "security")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/security/sqli",
+                            90,
+                            "security",
+                        )
+                    ]
                 ),
             ]
         )
@@ -1344,10 +1559,24 @@ class TestCliOnline:
         finder = FakeProvider(
             [
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/correctness/x", 70, "correctness")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/correctness/x",
+                            70,
+                            "correctness",
+                        )
+                    ]
                 ),
                 _emit_findings_result(
-                    [_finder_finding("src/api/auth.py", "openrabbit/security/sqli", 90, "security")]
+                    [
+                        _finder_finding(
+                            "src/api/auth.py",
+                            "openrabbit/security/sqli",
+                            90,
+                            "security",
+                        )
+                    ]
                 ),
             ]
         )
@@ -1361,8 +1590,16 @@ class TestCliOnline:
 
         rc = cli.main(
             [
-                "review", "--repo", "acme/repo", "--pr", "7",
-                "--commit", "headsha", "--config", str(cfg_path), "--post",
+                "review",
+                "--repo",
+                "acme/repo",
+                "--pr",
+                "7",
+                "--commit",
+                "headsha",
+                "--config",
+                str(cfg_path),
+                "--post",
             ]
         )
         assert rc == 0
@@ -1387,8 +1624,17 @@ class TestRunLensesParsing:
             {"file": "x.py", "ruleId": "r", "title": "", "startLine": "nope"},
             {"file": "x.py", "ruleId": "r", "title": "ok", "startLine": "z"},  # bad int
             "not-a-dict",
-            {"file": "x.py", "ruleId": "openrabbit/security/y", "title": "good", "confidence": 90,
-             "startLine": 1, "endLine": 2, "side": "BOGUS", "severity": "??", "category": "??"},
+            {
+                "file": "x.py",
+                "ruleId": "openrabbit/security/y",
+                "title": "good",
+                "confidence": 90,
+                "startLine": 1,
+                "endLine": 2,
+                "side": "BOGUS",
+                "severity": "??",
+                "category": "??",
+            },
         ]
         finder = FakeProvider([_emit_findings_result(bad)])
         prefix = ctx_mod.build_prefix(config, pr_context={})
@@ -1403,8 +1649,14 @@ class TestRunLensesParsing:
 
     def test_confidence_already_normalized(self, config):
         raw = [
-            {"file": "x.py", "ruleId": "openrabbit/security/y", "title": "t",
-             "confidence": 0.42, "startLine": 1, "endLine": 1}
+            {
+                "file": "x.py",
+                "ruleId": "openrabbit/security/y",
+                "title": "t",
+                "confidence": 0.42,
+                "startLine": 1,
+                "endLine": 1,
+            }
         ]
         finder = FakeProvider([_emit_findings_result(raw)])
         prefix = ctx_mod.build_prefix(config, pr_context={})
@@ -1415,8 +1667,14 @@ class TestRunLensesParsing:
 
     def test_confidence_non_numeric_defaults_zero(self, config):
         raw = [
-            {"file": "x.py", "ruleId": "openrabbit/security/y", "title": "t",
-             "confidence": "high", "startLine": 1, "endLine": 1}
+            {
+                "file": "x.py",
+                "ruleId": "openrabbit/security/y",
+                "title": "t",
+                "confidence": "high",
+                "startLine": 1,
+                "endLine": 1,
+            }
         ]
         finder = FakeProvider([_emit_findings_result(raw)])
         prefix = ctx_mod.build_prefix(config, pr_context={})
@@ -1445,9 +1703,7 @@ class TestRunLensesParsing:
         finder = FakeProvider([_emit_findings_result([])])  # only one call expected
         prefix = ctx_mod.build_prefix(config, pr_context={})
         # Only provide the correctness prompt; security is skipped.
-        out = run_lenses_mod.run_lenses(
-            finder, pf, {"correctness": "C"}, prefix=prefix
-        )
+        out = run_lenses_mod.run_lenses(finder, pf, {"correctness": "C"}, prefix=prefix)
         assert out == []
         assert len(finder.calls) == 1
 
@@ -1483,9 +1739,17 @@ class TestEmitGithub:
     def _finding(self):
         fp = compute_fingerprint("f.py", "r1", "ctx")
         return Finding(
-            file="f.py", start_line=1, end_line=1, side="RIGHT", severity="high",
-            category="correctness", confidence=0.9, title="t", body="b",
-            rule_id="r1", fingerprint=fp,
+            file="f.py",
+            start_line=1,
+            end_line=1,
+            side="RIGHT",
+            severity="high",
+            category="correctness",
+            confidence=0.9,
+            title="t",
+            body="b",
+            rule_id="r1",
+            fingerprint=fp,
         )
 
     def test_emit_github_posts_review_and_walkthrough(self):
@@ -1514,11 +1778,19 @@ class TestEmitGithub:
         adapter = _FakeAdapter()
         # A prior thread whose fingerprint is NOT among current findings -> stale.
         stale = ReviewThread(
-            thread_id="T1", comment_id="C1", fingerprint="deadbeef",
-            is_resolved=False, is_outdated=False, path="f.py", body="x",
+            thread_id="T1",
+            comment_id="C1",
+            fingerprint="deadbeef",
+            is_resolved=False,
+            is_outdated=False,
+            path="f.py",
+            body="x",
         )
         emit_mod.emit_github(
-            adapter, [self._finding()], summary_markdown="S", commit_sha="sha",
+            adapter,
+            [self._finding()],
+            summary_markdown="S",
+            commit_sha="sha",
             prior_threads=[stale],
         )
         assert adapter.resolved == ["T1"]
@@ -1532,9 +1804,17 @@ class TestSummaryRendering:
     def _finding(self, title="t", severity="high"):
         fp = compute_fingerprint("f.py", "r1", title)
         return Finding(
-            file="f.py", start_line=3, end_line=3, side="RIGHT", severity=severity,
-            category="correctness", confidence=0.9, title=title, body="b",
-            rule_id="r1", fingerprint=fp,
+            file="f.py",
+            start_line=3,
+            end_line=3,
+            side="RIGHT",
+            severity=severity,
+            category="correctness",
+            confidence=0.9,
+            title=title,
+            body="b",
+            rule_id="r1",
+            fingerprint=fp,
         )
 
     def test_empty_summary(self):
@@ -1546,7 +1826,9 @@ class TestSummaryRendering:
         assert "files: 2" in md
 
     def test_summary_escapes_pipes(self):
-        md = emit_mod.render_summary_markdown([self._finding(title="a | b")], stats={"files": 1})
+        md = emit_mod.render_summary_markdown(
+            [self._finding(title="a | b")], stats={"files": 1}
+        )
         assert "a \\| b" in md
 
     def test_summary_escapes_pipe_and_backtick_in_file_cell(self):
@@ -1644,12 +1926,20 @@ class TestGateHelpers:
         assert decision.changed_lines == 2
 
     def test_incremental_off_does_not_skip(self, tmp_path):
-        cfg = load_config({"version": 1, "review": {"incremental": False, "lenses": ["correctness"]}})
+        cfg = load_config(
+            {"version": 1, "review": {"incremental": False, "lenses": ["correctness"]}}
+        )
         store = gate_mod.StateStore(tmp_path / "s.json")
         store.record_review("acme/repo", 7, "abc")
         decision = gate_mod.evaluate_gate(
             cfg,
-            {"draft": False, "state": "open", "head_sha": "abc", "repo": "acme/repo", "number": 7},
+            {
+                "draft": False,
+                "state": "open",
+                "head_sha": "abc",
+                "repo": "acme/repo",
+                "number": 7,
+            },
             SAMPLE_DIFF,
             store=store,
         )
@@ -1663,7 +1953,9 @@ class TestRouteFallbacks:
             "--- a/tests/test_x.py\n+++ b/tests/test_x.py\n"
             "@@ -1 +1,3 @@\n+def test_y():\n+    assert add(1,2) == 3\n+    assert True\n"
         )
-        plan = route_mod.route_diff(diff, lenses=["correctness", "security", "tests", "maintainability"])
+        plan = route_mod.route_diff(
+            diff, lenses=["correctness", "security", "tests", "maintainability"]
+        )
         tf = plan.files[0]
         assert tf.file_type == "test"
         assert "security" not in tf.lenses
@@ -1720,7 +2012,10 @@ class TestVerifyEdges:
     def test_missing_tool_call_drops(self):
         # No batch verdict array at all -> every verified finding drops.
         result = CompletionResult(
-            text="no tool", tool_calls=[], finish_reason=FinishReason.STOP, usage=Usage()
+            text="no tool",
+            tool_calls=[],
+            finish_reason=FinishReason.STOP,
+            usage=Usage(),
         )
         verifier = FakeProvider([result])
         assert verify_mod.verify_findings(verifier, [self._finding()], gate=0.8) == []
@@ -1745,7 +2040,9 @@ class TestVerifyEdges:
     def test_high_risk_prompt_nudge(self):
         verifier = FakeProvider([_verify_result(0.95)])
         verify_mod.verify_findings(
-            verifier, [self._finding()], gate=0.8,
+            verifier,
+            [self._finding()],
+            gate=0.8,
             high_risk_files={"src/api/auth.py"},
         )
         msg = verifier.calls[0].messages[0]
@@ -1796,6 +2093,37 @@ class TestVerifyEdges:
         assert verifier.calls[0].max_tokens == 999
 
 
+class TestVerifySchemaStrictness:
+    """Item 3: the verifier tool schemas reject extra props, matching the
+    findings/judge contracts (additionalProperties: false)."""
+
+    def test_verify_schema_rejects_additional_properties(self):
+        assert verify_mod._VERIFY_SCHEMA.get("additionalProperties") is False
+
+    def test_verdict_schema_rejects_additional_properties(self):
+        assert verify_mod._VERDICT_SCHEMA.get("additionalProperties") is False
+
+    def test_verify_schema_validates_against_jsonschema(self):
+        # A well-formed verdict batch passes; an extra top-level / verdict prop
+        # is rejected by a real validator (proves the constraint is enforceable).
+        import jsonschema
+
+        validator = jsonschema.Draft202012Validator(verify_mod._VERIFY_SCHEMA)
+        good = {"verdicts": [{"id": 0, "keep": True, "confidence": 0.9}]}
+        assert list(validator.iter_errors(good)) == []
+
+        extra_top = {
+            "verdicts": [{"id": 0, "keep": True, "confidence": 0.9}],
+            "surprise": 1,
+        }
+        assert list(validator.iter_errors(extra_top))
+
+        extra_verdict = {
+            "verdicts": [{"id": 0, "keep": True, "confidence": 0.9, "injected": "x"}]
+        }
+        assert list(validator.iter_errors(extra_verdict))
+
+
 # --------------------------------------------------------------------------- #
 # console-script entrypoint                                                     #
 # --------------------------------------------------------------------------- #
@@ -1841,7 +2169,9 @@ class TestConsoleScriptEntrypoint:
 
         diff_path = tmp_path / "pr.diff"
         diff_path.write_text(SAMPLE_DIFF, encoding="utf-8")
-        rc = entry(["review", "--offline", "--diff", str(diff_path), "--fixtures", "demo"])
+        rc = entry(
+            ["review", "--offline", "--diff", str(diff_path), "--fixtures", "demo"]
+        )
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["reviewed"] is True

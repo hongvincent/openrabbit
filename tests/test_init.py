@@ -460,6 +460,46 @@ def test_module_main_delegates_to_cli(python_repo, capsys) -> None:
     assert ".openrabbit.yaml" in out
 
 
+def test_cli_init_surfaces_soft_warning_for_existing_config(python_repo, capsys):
+    """Item 2: `init` on a repo whose existing .openrabbit.yaml has a soft
+    model_roles warning prints the warning to stderr without failing."""
+    from openrabbit import cli
+
+    _write(
+        python_repo / ".openrabbit.yaml",
+        "version: 1\nmodel_roles:\n"
+        "  finder: {model: amazon.nova-pro-v1:0, region: eu-west-3}\n",
+    )
+    rc = cli.main(["init", "--path", str(python_repo), "--dry-run"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "warning" in err.lower()
+    assert "eu-west-3" in err
+    assert "finder" in err
+
+
+def test_cli_init_no_warning_without_existing_config(python_repo, capsys):
+    # A fresh repo (no .openrabbit.yaml yet) emits no model-role warning.
+    from openrabbit import cli
+
+    rc = cli.main(["init", "--path", str(python_repo), "--dry-run"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "model_roles" not in err
+
+
+def test_cli_init_unparsable_existing_config_does_not_block(python_repo, capsys):
+    # A pre-existing BROKEN config must not block onboarding: init swallows the
+    # load error, emits no warning, and still scaffolds the plan (rc == 0).
+    from openrabbit import cli
+
+    _write(python_repo / ".openrabbit.yaml", "version: not-an-int\n: : :\n")
+    rc = cli.main(["init", "--path", str(python_repo), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert ".openrabbit.yaml" in out
+
+
 # --------------------------------------------------------------------------- #
 # gh extension shell wrapper — structural invariants (not executed online)     #
 # --------------------------------------------------------------------------- #

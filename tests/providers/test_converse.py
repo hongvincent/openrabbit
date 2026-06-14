@@ -20,7 +20,6 @@ Covered:
 from __future__ import annotations
 
 import sys
-import types
 
 import pytest
 
@@ -97,8 +96,7 @@ def _resp(
     return {
         "output": {"message": {"role": "assistant", "content": content}},
         "stopReason": stop_reason,
-        "usage": usage
-        or {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+        "usage": usage or {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
     }
 
 
@@ -318,7 +316,10 @@ def test_tools_mapped_to_tool_config(install_boto3):
         ToolSpec(
             name="grep",
             description="search files",
-            json_schema={"type": "object", "properties": {"pattern": {"type": "string"}}},
+            json_schema={
+                "type": "object",
+                "properties": {"pattern": {"type": "string"}},
+            },
         )
     ]
     a = ConverseAdapter(model_id="m", region="r")
@@ -350,7 +351,11 @@ def test_forced_tool_choice_via_opts(install_boto3):
     )
     from openrabbit.providers.converse import ConverseAdapter
 
-    tools = [ToolSpec(name="emit_findings", description="emit", json_schema={"type": "object"})]
+    tools = [
+        ToolSpec(
+            name="emit_findings", description="emit", json_schema={"type": "object"}
+        )
+    ]
     a = ConverseAdapter(model_id="m", region="r")
     a.complete(
         "s",
@@ -370,7 +375,9 @@ def test_bare_verify_tool_name_forces_converse_tool_choice(install_boto3):
     _fake, client = install_boto3(responses=[_text_resp()])
     from openrabbit.providers.converse import ConverseAdapter
 
-    tools = [ToolSpec(name="verify_finding", description="d", json_schema={"type": "object"})]
+    tools = [
+        ToolSpec(name="verify_finding", description="d", json_schema={"type": "object"})
+    ]
     a = ConverseAdapter(model_id="m", region="r")
     a.complete(
         "s", [Message("user", "x")], tools, 100, None, tool_choice="verify_finding"
@@ -397,7 +404,9 @@ def test_tool_choice_auto_and_any(install_boto3):
 # Response parsing                                                             #
 # --------------------------------------------------------------------------- #
 def test_plain_completion(install_boto3):
-    install_boto3(responses=[_text_resp("The code looks fine.", stop_reason="end_turn")])
+    install_boto3(
+        responses=[_text_resp("The code looks fine.", stop_reason="end_turn")]
+    )
     from openrabbit.providers.converse import ConverseAdapter
 
     a = ConverseAdapter(model_id="m", region="r")
@@ -410,9 +419,7 @@ def test_plain_completion(install_boto3):
 
 
 def test_multiple_text_blocks_concatenated(install_boto3):
-    install_boto3(
-        responses=[_resp(content=[{"text": "alpha"}, {"text": "beta"}])]
-    )
+    install_boto3(responses=[_resp(content=[{"text": "alpha"}, {"text": "beta"}])])
     from openrabbit.providers.converse import ConverseAdapter
 
     a = ConverseAdapter(model_id="m", region="r")
@@ -434,7 +441,9 @@ def test_tool_use_parsed_into_tool_calls(install_boto3):
     from openrabbit.providers.converse import ConverseAdapter
 
     a = ConverseAdapter(model_id="m", region="r")
-    res = a.complete("s", [Message("user", "x")], [ToolSpec("read_file", "d", {})], 100, None)
+    res = a.complete(
+        "s", [Message("user", "x")], [ToolSpec("read_file", "d", {})], 100, None
+    )
     assert res.finish_reason is FinishReason.TOOL_USE
     assert res.text == "Let me look."
     assert len(res.tool_calls) == 1
@@ -464,7 +473,10 @@ def test_tool_use_round_trip(install_boto3):
     # Feed assistant turn + tool result back as neutral messages.
     follow = [
         Message("user", "find foo"),
-        Message("assistant", [{"toolUse": {"toolUseId": tc.id, "name": tc.name, "input": tc.args}}]),
+        Message(
+            "assistant",
+            [{"toolUse": {"toolUseId": tc.id, "name": tc.name, "input": tc.args}}],
+        ),
         Message("user", [ToolResult(id=tc.id, content="src/x.py:10: foo")]),
     ]
     second = a.complete("s", follow, tools, 100, None)
@@ -576,7 +588,9 @@ def test_usage_full_accounting(install_boto3):
 
 def test_usage_defaults_when_cache_fields_absent(install_boto3):
     install_boto3(
-        responses=[_text_resp(usage={"inputTokens": 7, "outputTokens": 3, "totalTokens": 10})]
+        responses=[
+            _text_resp(usage={"inputTokens": 7, "outputTokens": 3, "totalTokens": 10})
+        ]
     )
     from openrabbit.providers.converse import ConverseAdapter
 
@@ -592,7 +606,9 @@ def test_usage_missing_entirely(install_boto3):
     install_boto3(
         responses=[
             {
-                "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+                "output": {
+                    "message": {"role": "assistant", "content": [{"text": "hi"}]}
+                },
                 "stopReason": "end_turn",
             }
         ]

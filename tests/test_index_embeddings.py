@@ -66,9 +66,10 @@ def test_fake_embedder_empty_string_is_safe() -> None:
     [v] = emb.embed([""])
     assert len(v) == 8
     # zero-vector is normalized to all-zeros (no div-by-zero crash).
-    assert all(x == 0.0 for x in v) or pytest.approx(
-        math.sqrt(sum(x * x for x in v))
-    ) == 1.0
+    assert (
+        all(x == 0.0 for x in v)
+        or pytest.approx(math.sqrt(sum(x * x for x in v))) == 1.0
+    )
 
 
 def test_fake_embedder_conforms_to_interface() -> None:

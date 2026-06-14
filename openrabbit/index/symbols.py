@@ -30,9 +30,10 @@ from __future__ import annotations
 import ast
 import enum
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 # Hard cap on file size we will read+parse, so an attacker-crafted giant blob in
 # the indexed repo cannot exhaust memory on the runner.
@@ -356,9 +357,7 @@ def _extract_python(path: str, source: str) -> Optional[_FileFacts]:
 # regex heuristics backend (js/ts/go)                                           #
 # --------------------------------------------------------------------------- #
 # function foo(...)  |  export function foo(...)  |  export default function foo
-_JS_FUNC_RE = re.compile(
-    r"\bfunction\s+(?P<name>[A-Za-z_$][\w$]*)\s*\(", re.MULTILINE
-)
+_JS_FUNC_RE = re.compile(r"\bfunction\s+(?P<name>[A-Za-z_$][\w$]*)\s*\(", re.MULTILINE)
 # const foo = (...) =>   |   let foo = function   |   var foo = (...) =>
 _JS_ASSIGN_FN_RE = re.compile(
     r"\b(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
@@ -388,9 +387,28 @@ _GO_CALL_RE = re.compile(r"\b(?P<name>[A-Za-z_][\w]*)\s*\(", re.MULTILINE)
 # Reserved words that the bare-call regex would otherwise pick up.
 _CALL_KEYWORDS = frozenset(
     {
-        "if", "for", "while", "switch", "catch", "return", "function",
-        "typeof", "await", "new", "super", "func", "go", "defer", "select",
-        "case", "println", "print", "make", "len", "cap", "append",
+        "if",
+        "for",
+        "while",
+        "switch",
+        "catch",
+        "return",
+        "function",
+        "typeof",
+        "await",
+        "new",
+        "super",
+        "func",
+        "go",
+        "defer",
+        "select",
+        "case",
+        "println",
+        "print",
+        "make",
+        "len",
+        "cap",
+        "append",
     }
 )
 

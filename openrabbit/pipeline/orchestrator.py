@@ -17,9 +17,10 @@ boto3/httpx.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from openrabbit.config import Config, ModelRole
 from openrabbit.domain import CompletionResult, Message, ToolSpec, Usage
@@ -120,9 +121,7 @@ def model_factory(role: ModelRole) -> Provider:
         from openrabbit.providers.converse import ConverseAdapter
 
         if role.region is None:
-            raise ValueError(
-                f"ConverseAdapter requires a region for model {model!r}"
-            )
+            raise ValueError(f"ConverseAdapter requires a region for model {model!r}")
         return ConverseAdapter(model_id=model, region=role.region)
 
     raise ValueError(
@@ -175,7 +174,7 @@ def review(
     *,
     lens_prompts: Optional[Mapping[str, str]] = None,
     store: Optional[gate_mod.StateStore] = None,
-    learnings_store: Optional["LearningsStore"] = None,
+    learnings_store: Optional[LearningsStore] = None,
     prior_fingerprints: Optional[set[str]] = None,
     enclosing_fetcher: ctx.EnclosingFetcher = ctx.gather_enclosing_context,
     emit: bool = True,
@@ -323,9 +322,7 @@ def review(
     dedup_against: set[str] = set(prior_fingerprints or set())
     if store is not None and repo is not None and number is not None:
         dedup_against |= store.get_posted_fingerprints(str(repo), int(number))
-    ranked = dedup_mod.dedup_and_rank(
-        verified, prior_fingerprints=dedup_against
-    )
+    ranked = dedup_mod.dedup_and_rank(verified, prior_fingerprints=dedup_against)
 
     # Stage 7 — emit (offline payload by default).
     emitted: dict[str, Any] = {}
@@ -368,15 +365,22 @@ def review(
             # No SHA to record but still persist fingerprints.
             store.record_posted_fingerprints(str(repo), int(number), kept_fps)
 
-    # Per-PR cost telemetry (SPEC 7.3): sum Usage across every model call and
-    # roll it up. The dollar estimate is attributed to the configured finder
-    # model (the broad pass that dominates token volume); the *configured* model
-    # id is used (not the provider instance's, which a FakeProvider stubs) so the
-    # price table resolves. Unpriced models still report token totals with no $.
+    # Per-PR cost telemetry (SPEC 7.3, item 1): price EACH role's Usage at ITS
+    # OWN model rate, then sum. Pricing the (pricier) verifier tokens at the
+    # (cheaper) finder rate understates the bill, so finder and verifier are
+    # priced separately. The *configured* model id is used (not the provider
+    # instance's, which a FakeProvider stubs) so the price table resolves.
+    # Unpriced models still report token totals with no $.
     total_usage = finder.total_usage + verifier.total_usage
     total_calls = finder.call_count + verifier.call_count
-    cost_summary = CostSummary.from_usage(
-        total_usage, model=_cost_model_id(config, raw_finder), calls=total_calls
+    finder_model = _cost_model_id(config, "finder", raw_finder)
+    verifier_model = _cost_model_id(config, "verifier", raw_verifier)
+    cost_summary = CostSummary.from_role_usages(
+        [
+            (finder_model, finder.total_usage),
+            (verifier_model, verifier.total_usage),
+        ],
+        calls=total_calls,
     )
 
     return ReviewResult(
@@ -390,18 +394,17 @@ def review(
     )
 
 
-def _cost_model_id(config: Config, finder: Provider) -> Optional[str]:
-    """Pick the model id used to price the per-PR cost summary.
+def _cost_model_id(config: Config, role: str, provider: Provider) -> Optional[str]:
+    """Pick the model id used to price one role's slice of the cost summary.
 
-    Prefer the configured ``finder`` role's model id (the broad pass that
-    dominates token volume and whose price is in the table). Fall back to the
-    provider instance's ``model`` only when no finder role is configured (so an
-    ad-hoc/offline run still names *something*).
+    Prefer the configured ``model_roles.<role>`` model id (whose price is in the
+    table). Fall back to the provider instance's ``model`` only when that role is
+    not configured (so an ad-hoc/offline run still names *something*).
     """
-    finder_role = config.model_roles.get("finder")
-    if finder_role is not None and finder_role.model:
-        return finder_role.model
-    return finder.model
+    model_role = config.model_roles.get(role)
+    if model_role is not None and model_role.model:
+        return model_role.model
+    return provider.model
 
 
 def _stub_lens_prompt(lens: str) -> str:

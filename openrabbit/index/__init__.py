@@ -34,7 +34,7 @@ from openrabbit.index.symbols import (
     build_index,
 )
 
-__all__ = [
+__all__ = [  # noqa: RUF022 — grouped by source module (symbols/embeddings), not alphabetical
     # symbols
     "SymbolIndex",
     "build_index",

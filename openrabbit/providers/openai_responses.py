@@ -207,7 +207,10 @@ class OpenAIResponsesAdapter(Provider):
           ``{"type": "function", "name": <name>}`` (the canonical neutral
           forced-single-tool form shared with :class:`ConverseAdapter`).
         """
-        if isinstance(tool_choice, str) and tool_choice not in cls._TOOL_CHOICE_KEYWORDS:
+        if (
+            isinstance(tool_choice, str)
+            and tool_choice not in cls._TOOL_CHOICE_KEYWORDS
+        ):
             return {"type": "function", "name": tool_choice}
         return tool_choice
 

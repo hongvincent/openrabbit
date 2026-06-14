@@ -14,8 +14,9 @@ Confusion-matrix mapping from judge verdicts (per category):
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 #: Default false-positive budget; overall fails if exceeded (SPEC: < 0.10).
 DEFAULT_FP_BUDGET = 0.10
@@ -180,9 +181,7 @@ def compute_scorecard(
             if g.addressed:
                 addressed_hits += 1
 
-    categories = sorted(
-        set(cat_tp) | set(cat_fp) | set(cat_fn)
-    )
+    categories = sorted(set(cat_tp) | set(cat_fp) | set(cat_fn))
     category_scores = [
         CategoryScore(
             category=cat,

@@ -12,8 +12,6 @@ import json
 import pytest
 
 from openrabbit.domain import CompletionResult, FinishReason, ToolCall, Usage
-from openrabbit.findings import Finding
-from openrabbit.providers.base import FakeProvider, ProviderError
 from openrabbit.eval.golden_set import GoldenSample
 from openrabbit.eval.judge import (
     JUDGE_TOOL_NAME,
@@ -22,6 +20,8 @@ from openrabbit.eval.judge import (
     Verdict,
     calibrate_agreement,
 )
+from openrabbit.findings import Finding
+from openrabbit.providers.base import FakeProvider, ProviderError
 
 
 def _finding(category: str = "correctness", title: str = "Off-by-one") -> Finding:
@@ -53,14 +53,20 @@ def _sample(known_bug: bool = True, category: str = "correctness") -> GoldenSamp
     )
 
 
-def _tool_result(verdict: str, *, confidence: float = 0.9, rationale: str = "ok") -> CompletionResult:
+def _tool_result(
+    verdict: str, *, confidence: float = 0.9, rationale: str = "ok"
+) -> CompletionResult:
     return CompletionResult(
         text="",
         tool_calls=[
             ToolCall(
                 id="c1",
                 name=JUDGE_TOOL_NAME,
-                args={"verdict": verdict, "confidence": confidence, "rationale": rationale},
+                args={
+                    "verdict": verdict,
+                    "confidence": confidence,
+                    "rationale": rationale,
+                },
             )
         ],
         finish_reason=FinishReason.TOOL_USE,
@@ -232,7 +238,11 @@ def test_verdict_to_dict_is_json_serializable():
     v = judge.judge(_finding(), _sample())
     d = v.to_dict()
     json.dumps(d)
-    assert d == {"verdict": "match", "confidence": pytest.approx(0.6), "rationale": "why"}
+    assert d == {
+        "verdict": "match",
+        "confidence": pytest.approx(0.6),
+        "rationale": "why",
+    }
 
 
 def test_judge_handles_non_numeric_confidence():
