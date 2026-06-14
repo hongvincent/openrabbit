@@ -34,9 +34,9 @@ Each item = a dynamic workflow (TDD + adversarial review), then `uv run pytest`,
 1. [x] `[project.scripts] openrabbit = "openrabbit.cli:main"` in pyproject (bare `openrabbit` command) — DONE (iter1)
 2. [x] Real enclosing-context fetcher — DONE (iter1): `GitEnclosingFetcher` (window + enclosing scope + git log), symlink-traversal-safe + 2MiB read cap, **fully wired** through review()→run_lenses()→build_file_message() + CLI injection
 3. [x] Incremental review fingerprint persistence in StateStore — DONE (iter1): record/get_posted_fingerprints, single-write record_review(fingerprints=), legacy-format migration; synchronize path suppresses already-posted fingerprints
-4. [ ] Reusable GitHub Action (`actions/reusable-workflow.yml` + composite), SHA-pinned, `permissions: contents: read` + minimal write; OIDC→STS keyless Bedrock auth in the workflow
-5. [ ] Remaining lenses as SKILL.md: performance, tests, maintainability (+ wire into route/run_lenses)
-6. [ ] Walkthrough enrichment: grouped changed-files table + Mermaid for interaction changes
+4. [x] Reusable GitHub Action + composite — DONE (iter2): SHA-pinned (checkout v6/setup-uv v8/configure-aws-credentials v6, real SHAs), contents:read default + scoped pr-write/id-token, OIDC keyless Bedrock
+5. [x] Remaining lenses (performance, tests, maintainability) — DONE (iter2): SKILL.md added; lens selection already config-driven (all 5 load + route from .openrabbit.yaml)
+6. [x] Walkthrough enrichment — DONE (iter2): grouped changed-files table + Mermaid (interaction-gated, quote-escaped, heuristic tightened for low noise)
 
 ### Phase 2 — Trust & cost
 7. [ ] Learnings/memory store + feedback loop (dismissal → confidence recalibration + auto-suppression); per-repo/org scope

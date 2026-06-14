@@ -214,13 +214,32 @@ def _cmd_review_online(args: argparse.Namespace, config: Config) -> int:
         )
         if result.reviewed and args.post:
             from openrabbit.pipeline import emit as emit_mod
+            from openrabbit.pipeline import route as route_mod
+            from openrabbit.pipeline import walkthrough as walkthrough_mod
 
-            summary = emit_mod.render_summary_markdown(result.findings)
+            # Recompute the same stats the offline orchestrator embeds so the
+            # shipped GitHub walkthrough matches the offline demo (parity): the
+            # reviewable-file count, the raw finder count, and the kept count.
+            plan = route_mod.route_diff(diff, lenses=list(config.review.lenses))
+            stats = {
+                "reviewable files": len(plan.reviewable_files),
+                "raw": result.raw_finding_count,
+                "kept": len(result.findings),
+            }
+            summary = emit_mod.render_summary_markdown(result.findings, stats=stats)
+            # Build the enriched sticky walkthrough (grouped changed-files table
+            # + conditional Mermaid + findings table) from the routed diff. The
+            # inline review body stays the minimal summary; the walkthrough
+            # comment carries the richer content.
+            walkthrough = walkthrough_mod.build_walkthrough(
+                pr_context, plan.files, result.findings, stats=stats
+            )
             emit_mod.emit_github(
                 adapter,
                 result.findings,
                 summary_markdown=summary,
                 commit_sha=str(args.commit),
+                walkthrough_markdown=walkthrough,
                 prior_threads=prior_threads,
             )
         _print_result(result)

@@ -31,6 +31,7 @@ from openrabbit.pipeline import gate as gate_mod
 from openrabbit.pipeline import route as route_mod
 from openrabbit.pipeline import run_lenses as run_lenses_mod
 from openrabbit.pipeline import verify as verify_mod
+from openrabbit.pipeline import walkthrough as walkthrough_mod
 
 
 @dataclass
@@ -220,17 +221,27 @@ def review(
     # Stage 7 — emit (offline payload by default).
     emitted: dict[str, Any] = {}
     if emit:
+        # Label it "reviewable files" (not bare "files") so this count — which is
+        # the routed reviewable-file count — never reads as contradicting the
+        # walkthrough's changed-files table, which lists ALL files (incl. docs /
+        # lockfiles / generated). The CLI online path mirrors this exactly.
         stats = {
-            "files": len(plan.reviewable_files),
+            "reviewable files": len(plan.reviewable_files),
             "raw": len(raw_findings),
             "kept": len(ranked),
         }
         summary = emit_mod.render_summary_markdown(ranked, stats=stats)
+        # Enriched sticky walkthrough: high-level summary + grouped changed-files
+        # table + (conditional) Mermaid interaction diagram + findings table.
+        walkthrough = walkthrough_mod.build_walkthrough(
+            pr_context, plan.files, ranked, stats=stats
+        )
         emitted = emit_mod.emit_console(
             ranked,
             summary_markdown=summary,
             commit_sha=pr_context.get("head_sha"),
             stats=stats,
+            walkthrough_markdown=walkthrough,
         )
 
     # Record incremental state after a successful review. The SHA update and the
