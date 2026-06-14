@@ -314,6 +314,76 @@ class TestRunLenses:
         assert findings == []
         assert finder.calls == []
 
+    def test_injected_enclosing_fetcher_reaches_finder_message(self, config, tmp_path):
+        # Integration: an injected GitEnclosingFetcher must actually surface the
+        # enclosing-context block in the message the finder provider receives.
+        import subprocess
+
+        from openrabbit.pipeline.enclosing import GitEnclosingFetcher
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        def _git(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=str(repo), check=True, capture_output=True, text=True
+            )
+
+        _git("init", "-q")
+        _git("config", "user.email", "t@example.com")
+        _git("config", "user.name", "Test")
+        (repo / "svc.py").write_text(
+            "class Service:\n"
+            "    def charge(self, amount):\n"
+            "        if amount <= 0:\n"
+            '            raise ValueError("bad")\n'
+            "        return amount\n"
+        )
+        _git("add", "svc.py")
+        _git("commit", "-q", "-m", "init")
+
+        diff = (
+            "diff --git a/svc.py b/svc.py\n"
+            "index 1111111..2222222 100644\n"
+            "--- a/svc.py\n"
+            "+++ b/svc.py\n"
+            "@@ -2,3 +2,3 @@ class Service:\n"
+            "     def charge(self, amount):\n"
+            "-        if amount <= 0:\n"
+            "+        if amount < 0:\n"
+        )
+        plan = route_mod.route_diff(diff, lenses=["correctness"])
+        pf = next(f for f in plan.files if f.path == "svc.py")
+        finder = FakeProvider([_emit_findings_result([])])
+        fetcher = GitEnclosingFetcher(repo_root=repo)
+
+        run_lenses_mod.run_lenses(
+            finder,
+            pf,
+            lens_prompts={"correctness": "COR"},
+            prefix="P",
+            enclosing_fetcher=fetcher,
+        )
+
+        assert len(finder.calls) == 1
+        msg = finder.calls[0].messages[0]
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        assert "enclosing-context" in content
+        assert "def charge(self, amount):" in content
+
+    def test_default_run_lenses_has_no_enclosing_block(self, config):
+        # Without an injected fetcher the finder message stays diff-only (the
+        # no-op default), so offline/unit runs are unchanged.
+        plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness"])
+        pf = next(f for f in plan.files if f.path == "src/api/auth.py")
+        finder = FakeProvider([_emit_findings_result([])])
+        run_lenses_mod.run_lenses(
+            finder, pf, lens_prompts={"correctness": "COR"}, prefix="P"
+        )
+        msg = finder.calls[0].messages[0]
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        assert "enclosing-context" not in content
+
 
 # --------------------------------------------------------------------------- #
 # verify                                                                       #
@@ -482,6 +552,41 @@ class TestOrchestratorEndToEnd:
         assert "review" in result.emitted
         # finder called twice (2 lenses on auth.py)
         assert len(finder.calls) == 2
+
+    def test_review_threads_enclosing_fetcher_to_finder(self, config):
+        # review() must forward an injected enclosing_fetcher all the way to the
+        # finder message (the wiring the production CLI relies on).
+        captured: list[str] = []
+
+        def _fetcher(file_plan):
+            captured.append(file_plan.path)
+            return f"# context for {file_plan.path}\nENCLOSED-MARKER"
+
+        finder = FakeProvider(
+            [_emit_findings_result([]), _emit_findings_result([])]
+        )
+        verifier = FakeProvider([])
+        result = orch_mod.review(
+            config,
+            pr_context={
+                "draft": False,
+                "state": "open",
+                "head_sha": "abc",
+                "diff": SAMPLE_DIFF,
+                "title": "t",
+                "body": "b",
+            },
+            providers={"finder": finder, "verifier": verifier},
+            enclosing_fetcher=_fetcher,
+        )
+        assert result.reviewed is True
+        # The fetcher ran for the reviewable file...
+        assert "src/api/auth.py" in captured
+        # ...and its output is embedded in the finder message.
+        content = finder.calls[0].messages[0].content
+        content = content if isinstance(content, str) else str(content)
+        assert "ENCLOSED-MARKER" in content
+        assert "enclosing-context" in content
 
     def test_gate_skips_short_circuits(self, config):
         finder = FakeProvider([])
@@ -1229,3 +1334,54 @@ class TestVerifyEdges:
         )
         msg = verifier.calls[0].messages[0]
         assert "HIGH-RISK" in msg.content
+
+
+# --------------------------------------------------------------------------- #
+# console-script entrypoint                                                     #
+# --------------------------------------------------------------------------- #
+class TestConsoleScriptEntrypoint:
+    """The bare ``openrabbit`` command resolves to ``openrabbit.cli:main``.
+
+    These tests assert the wiring without spawning a subprocess (so they make
+    no network calls and need no creds): they import the callable the entry
+    point names and confirm pyproject points at exactly that target.
+    """
+
+    def test_main_is_callable(self):
+        from openrabbit.cli import main
+
+        assert callable(main)
+
+    def test_pyproject_declares_console_script(self):
+        try:
+            import tomllib  # Python 3.11+
+        except ModuleNotFoundError:  # pragma: no cover
+            import tomli as tomllib  # type: ignore[no-redefine]
+
+        root = Path(__file__).resolve().parent.parent
+        with (root / "pyproject.toml").open("rb") as fh:
+            data = tomllib.load(fh)
+
+        scripts = data["project"]["scripts"]
+        assert scripts["openrabbit"] == "openrabbit.cli:main"
+
+    def test_entrypoint_target_runs_offline(self, tmp_path, capsys):
+        """Resolve the exact ``module:attr`` the entry point names and run it."""
+        try:
+            import tomllib  # Python 3.11+
+        except ModuleNotFoundError:  # pragma: no cover
+            import tomli as tomllib  # type: ignore[no-redefine]
+        import importlib
+
+        root = Path(__file__).resolve().parent.parent
+        with (root / "pyproject.toml").open("rb") as fh:
+            target = tomllib.load(fh)["project"]["scripts"]["openrabbit"]
+        module_path, _, attr = target.partition(":")
+        entry = getattr(importlib.import_module(module_path), attr)
+
+        diff_path = tmp_path / "pr.diff"
+        diff_path.write_text(SAMPLE_DIFF, encoding="utf-8")
+        rc = entry(["review", "--offline", "--diff", str(diff_path), "--fixtures", "demo"])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["reviewed"] is True

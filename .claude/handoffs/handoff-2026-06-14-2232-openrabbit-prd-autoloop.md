@@ -31,9 +31,9 @@ Built **openrabbit** (a high-trust, Bedrock-only AI code reviewer) from scratch:
 Each item = a dynamic workflow (TDD + adversarial review), then `uv run pytest`, then commit. Mark `[x]` as done.
 
 ### Phase 1 — Action packaging & incremental UX
-1. [ ] `[project.scripts] openrabbit = "openrabbit.cli:main"` in pyproject (bare `openrabbit` command)
-2. [ ] Wire `gather_enclosing_context` to real `grep`/`read_file`(window)/`git log`/`git blame` symbol pre-fetch (behind the existing `EnclosingFetcher` hook)
-3. [ ] Incremental review fingerprint persistence in StateStore (last_reviewed_sha already done) + `synchronize` re-review only new commits
+1. [x] `[project.scripts] openrabbit = "openrabbit.cli:main"` in pyproject (bare `openrabbit` command) — DONE (iter1)
+2. [x] Real enclosing-context fetcher — DONE (iter1): `GitEnclosingFetcher` (window + enclosing scope + git log), symlink-traversal-safe + 2MiB read cap, **fully wired** through review()→run_lenses()→build_file_message() + CLI injection
+3. [x] Incremental review fingerprint persistence in StateStore — DONE (iter1): record/get_posted_fingerprints, single-write record_review(fingerprints=), legacy-format migration; synchronize path suppresses already-posted fingerprints
 4. [ ] Reusable GitHub Action (`actions/reusable-workflow.yml` + composite), SHA-pinned, `permissions: contents: read` + minimal write; OIDC→STS keyless Bedrock auth in the workflow
 5. [ ] Remaining lenses as SKILL.md: performance, tests, maintainability (+ wire into route/run_lenses)
 6. [ ] Walkthrough enrichment: grouped changed-files table + Mermaid for interaction changes
