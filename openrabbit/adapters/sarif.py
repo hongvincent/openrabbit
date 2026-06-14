@@ -201,7 +201,7 @@ def findings_to_sarif(
 
 
 def write_sarif(
-    path: Union[str, "os.PathLike[str]"],
+    path: Union[str, os.PathLike[str]],
     findings: list[Finding],
     *,
     tool_version: str,

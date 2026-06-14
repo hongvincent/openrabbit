@@ -146,10 +146,10 @@ def test_template_calls_reusable_workflow(template: dict[str, Any]) -> None:
     """The starter workflow must call openrabbit's reusable workflow via uses:."""
     uses_values = list(_iter_uses(template))
     assert uses_values, "starter workflow declares no `uses:`"
-    reusable_refs = [u for u in uses_values if "reusable" in u or ".yml@" in u or ".yaml@" in u]
-    assert reusable_refs, (
-        "starter workflow must `uses:` openrabbit's reusable workflow"
-    )
+    reusable_refs = [
+        u for u in uses_values if "reusable" in u or ".yml@" in u or ".yaml@" in u
+    ]
+    assert reusable_refs, "starter workflow must `uses:` openrabbit's reusable workflow"
     # The reference should point at an openrabbit workflow file.
     assert any("openrabbit" in u.lower() for u in uses_values), (
         "starter workflow must reference an openrabbit workflow"
@@ -205,9 +205,7 @@ def test_template_reusable_ref_uses_placeholder_not_foreign_sha(
 ) -> None:
     """The reusable-workflow ref must be a <PINNED_SHA> placeholder, NOT a
     copy-pasted foreign SHA (e.g. actions/checkout's commit)."""
-    reusable_refs = [
-        u for u in _iter_uses(template) if "reusable-workflow.yml" in u
-    ]
+    reusable_refs = [u for u in _iter_uses(template) if "reusable-workflow.yml" in u]
     assert reusable_refs, "template must reference the reusable workflow"
     for ref in reusable_refs:
         _, _, ref_spec = ref.partition("@")
@@ -349,9 +347,7 @@ def test_ruleset_enforcement_supports_evaluate(ruleset: dict[str, Any]) -> None:
 def test_ruleset_targets_default_branch(ruleset: dict[str, Any]) -> None:
     """The branch ruleset includes the repo default branch."""
     text = _text(RULESET_JSON).lower()
-    assert "default" in text, (
-        "ruleset must target the default branch (~DEFAULT_BRANCH)"
-    )
+    assert "default" in text, "ruleset must target the default branch (~DEFAULT_BRANCH)"
     # The structured conditions should reference ref_name include.
     conditions = ruleset.get("conditions", {})
     ref_name = conditions.get("ref_name", {}) if isinstance(conditions, dict) else {}
@@ -391,8 +387,11 @@ def test_ruleset_references_sha_pinned_workflow(ruleset: dict[str, Any]) -> None
     """The required workflow is pinned to a SHA/ref (placeholder is acceptable)."""
     text = _text(RULESET_JSON)
     # Either a concrete 40-hex SHA or a clearly-marked placeholder for org/repo@SHA.
-    assert SHA_RE.search(text) or "@<" in text or "@COMMIT_SHA" in text.upper() or (
-        "<sha>" in text.lower() or "placeholder" in text.lower()
+    assert (
+        SHA_RE.search(text)
+        or "@<" in text
+        or "@COMMIT_SHA" in text.upper()
+        or ("<sha>" in text.lower() or "placeholder" in text.lower())
     ), "ruleset must reference the workflow pinned to a SHA/ref (or placeholder)"
 
 
@@ -431,9 +430,7 @@ def test_required_check_context_matches_composite_job_names(
     )
 
     # Ruleset context must equal the composite name (not the bare reusable name).
-    rsc = next(
-        r for r in ruleset["rules"] if r.get("type") == "required_status_checks"
-    )
+    rsc = next(r for r in ruleset["rules"] if r.get("type") == "required_status_checks")
     contexts = [
         c.get("context")
         for c in rsc["parameters"]["required_status_checks"]
@@ -486,9 +483,7 @@ def test_safe_settings_requires_openrabbit_check(
     assert "required_status_checks" in text, (
         "safe-settings protection must declare required_status_checks"
     )
-    assert "openrabbit" in text, (
-        "safe-settings must require the openrabbit check"
-    )
+    assert "openrabbit" in text, "safe-settings must require the openrabbit check"
 
 
 def test_safe_settings_required_check_is_structured(
@@ -506,9 +501,9 @@ def test_safe_settings_required_check_is_structured(
         # GitHub API shape: required_status_checks.checks[].context or .contexts[].
         checks = rsc.get("checks") or []
         contexts = rsc.get("contexts") or []
-        names = [
-            c.get("context") if isinstance(c, dict) else c for c in checks
-        ] + list(contexts)
+        names = [c.get("context") if isinstance(c, dict) else c for c in checks] + list(
+            contexts
+        )
         if any("openrabbit" in str(n).lower() for n in names):
             found = True
     assert found, (

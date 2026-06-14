@@ -12,11 +12,12 @@ with no third-party deps when callers pass a dict.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union, overload
+from typing import Any, Optional, Union, overload
 
-from openrabbit.bedrock_models import Severity, validate_model_region
+from openrabbit.bedrock_models import Severity, Verdict, validate_model_region
 
 # --------------------------------------------------------------------------- #
 # vocabularies & defaults                                                     #
@@ -144,9 +145,7 @@ def load_config(
         )
 
     if not isinstance(data, Mapping):
-        raise ConfigError(
-            f"config root must be a mapping, got {type(data).__name__}"
-        )
+        raise ConfigError(f"config root must be a mapping, got {type(data).__name__}")
 
     config = _parse(dict(data))
 
@@ -159,6 +158,20 @@ def load_config(
     if collect_warnings:
         return config, warnings
     return config
+
+
+def _iter_model_role_verdicts(config: Config) -> Iterator[tuple[str, Verdict]]:
+    """Yield ``(role, verdict)`` for each role with a non-``None`` verdict.
+
+    The single source of truth for the per-role model/region check: every
+    ``model_roles`` consumer (:func:`validate_model_roles`,
+    :func:`_classify_model_role_verdicts`) iterates this so the check (and its
+    sort order) lives in exactly one place. Roles are visited in sorted order.
+    """
+    for role, spec in sorted(config.model_roles.items()):
+        verdict = validate_model_region(spec.model, spec.region)
+        if verdict is not None:
+            yield role, verdict
 
 
 def validate_model_roles(config: Config) -> list[str]:
@@ -174,28 +187,23 @@ def validate_model_roles(config: Config) -> list[str]:
     and errors). :func:`load_config` consults the underlying verdicts to decide
     what raises; a clean config yields ``[]``.
     """
-    messages: list[str] = []
-    for role, spec in sorted(config.model_roles.items()):
-        verdict = validate_model_region(spec.model, spec.region)
-        if verdict is None:
-            continue
-        messages.append(f"[{verdict.severity.value}] model_roles.{role}: {verdict.message}")
-    return messages
+    return [
+        f"[{verdict.severity.value}] model_roles.{role}: {verdict.message}"
+        for role, verdict in _iter_model_role_verdicts(config)
+    ]
 
 
 def _classify_model_role_verdicts(config: Config) -> tuple[list[str], list[str]]:
     """Split model-role verdicts into ``(hard_errors, soft_warnings)``.
 
-    Same checks as :func:`validate_model_roles` but keyed on the structured
+    Same checks as :func:`validate_model_roles` (shared via
+    :func:`_iter_model_role_verdicts`) but keyed on the structured
     :class:`~openrabbit.bedrock_models.Severity` so :func:`load_config` can raise
     on errors while merely collecting warnings.
     """
     errors: list[str] = []
     warnings: list[str] = []
-    for role, spec in sorted(config.model_roles.items()):
-        verdict = validate_model_region(spec.model, spec.region)
-        if verdict is None:
-            continue
+    for role, verdict in _iter_model_role_verdicts(config):
         msg = f"model_roles.{role}: {verdict.message}"
         if verdict.severity is Severity.ERROR:
             errors.append(msg)
@@ -244,9 +252,7 @@ def _parse_review(raw: Any) -> ReviewConfig:
 
     profile = block.get("profile", DEFAULT_PROFILE)
     if profile not in PROFILES:
-        raise ConfigError(
-            f"review.profile must be one of {PROFILES}, got {profile!r}"
-        )
+        raise ConfigError(f"review.profile must be one of {PROFILES}, got {profile!r}")
 
     gate = block.get("confidence_gate", DEFAULT_CONFIDENCE_GATE)
     if not isinstance(gate, (int, float)) or isinstance(gate, bool):
@@ -304,7 +310,9 @@ def _parse_path_instructions(raw: Any) -> list[PathInstruction]:
                 f"review.path_instructions[{i}] requires 'path' and 'instructions'"
             )
         out.append(
-            PathInstruction(path=str(entry["path"]), instructions=str(entry["instructions"]))
+            PathInstruction(
+                path=str(entry["path"]), instructions=str(entry["instructions"])
+            )
         )
     return out
 

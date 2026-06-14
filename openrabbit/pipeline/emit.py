@@ -16,7 +16,8 @@ line + a grouped, per-file findings table.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any, Optional
 
 from openrabbit.adapters.github import build_review_comment
 from openrabbit.findings import Finding
@@ -36,9 +37,7 @@ def render_summary_markdown(
         return header
 
     lines = ["## openrabbit review", ""]
-    lines.append(
-        f"Found **{len(findings)}** issue(s) above the confidence gate."
-    )
+    lines.append(f"Found **{len(findings)}** issue(s) above the confidence gate.")
     if stats:
         lines += ["", _stats_line(stats)]
     lines += [

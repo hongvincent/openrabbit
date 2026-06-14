@@ -29,6 +29,7 @@ dev = [
     "pytest-mock>=3.12",
     "respx>=0.21",
     "PyJWT[crypto]>=2.8",
+    "ruff>=0.6",
 ]
 
 [build-system]
@@ -41,3 +42,54 @@ packages = ["openrabbit"]
 [tool.pytest.ini_options]
 addopts = "--cov=openrabbit --cov-report=term-missing"
 testpaths = ["tests"]
+
+[tool.ruff]
+# Match the existing code style: 4.x targets, 88-col Black-compatible width.
+target-version = "py311"
+line-length = 88
+# Lint/format the package + its tests + helper scripts. Generated/vendored dirs
+# and virtualenvs are excluded so CI lint stays signal-only.
+extend-exclude = [".venv", "__pycache__", "uv.lock"]
+
+[tool.ruff.lint]
+# A pragmatic, low-noise rule set consistent with the existing typed-clean style:
+#   E,W  pycodestyle errors/warnings    F    pyflakes (unused imports/vars)
+#   I    isort (import ordering)        UP   pyupgrade (modern syntax)
+#   B    flake8-bugbear (real bugs)     C4   flake8-comprehensions
+#   SIM  flake8-simplify               RUF   ruff-specific lints
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    # The codebase wraps long explanatory comments/strings past 88 cols in a few
+    # places; ruff-format owns wrapping, so don't double-flag line length here.
+    "E501",
+    # `zip(..., strict=...)` is 3.10+; the repo supports 3.11+, but several
+    # intentional non-strict zips exist. Leave the choice to the author.
+    "B905",
+    # Annotation *style* preference: the codebase deliberately and consistently
+    # uses `Optional[X]` / `Union[A, B]` (with `from __future__ import
+    # annotations`) over the `X | None` PEP 604 form. Rewriting 150+ sites is
+    # pure churn with no behavior change, so keep the chosen style and turn the
+    # two annotation-syntax rules off (the rest of UP still runs).
+    "UP007",  # non-pep604-annotation-union  (Union[A, B] is intentional)
+    "UP045",  # non-pep604-annotation-optional  (Optional[X] is intentional)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately use idioms that production code should avoid; keep the test
+# suite readable rather than lint-perfect. Each rule below is a *style* nitpick,
+# never a correctness signal, and only relaxed inside tests/:
+#   B011/SIM117  assert-false / nested-with — readable in tests
+#   C408         dict(...) kwargs builder — clearer than a literal for fixtures
+#   RUF015       [x for x in ...][0] — fine on tiny fixed request lists
+#   B017         assert pytest.raises(Exception) — intentional broad-raise checks
+#   RUF059       throwaway `_`-style unpacks in destructuring asserts
+#   RUF012       mutable default on a throwaway test stub class
+"tests/**" = ["B011", "SIM117", "C408", "RUF015", "B017", "RUF059", "RUF012"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["openrabbit"]
+
+[tool.ruff.format]
+# Black-compatible defaults (double quotes, trailing commas) — matches the
+# existing formatting so `ruff format --check` is a no-op on the current tree.
+quote-style = "double"

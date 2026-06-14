@@ -16,9 +16,10 @@ Design constraints (per task rules):
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional, Union
+from typing import Any, Optional, Union
 
 # Vocabulary kept consistent with openrabbit.findings.CATEGORIES so labels can be
 # scored per-category by the scorecard.
@@ -54,7 +55,9 @@ _CATEGORY_HINTS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     (
         "maintainability",
-        re.compile(r"\b(refactor|cleanup|lint|typo|rename|dead code)\w*", re.IGNORECASE),
+        re.compile(
+            r"\b(refactor|cleanup|lint|typo|rename|dead code)\w*", re.IGNORECASE
+        ),
     ),
 )
 
@@ -99,7 +102,7 @@ class GoldenSample:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "GoldenSample":
+    def from_dict(cls, data: dict[str, Any]) -> GoldenSample:
         """Build a :class:`GoldenSample` from a camelCase dict (ignores extras)."""
         return cls(
             sample_id=data["sampleId"],

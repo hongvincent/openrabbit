@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -68,12 +68,10 @@ class Finding:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to the camelCase wire contract (JSON-serializable)."""
-        return {
-            wire: getattr(self, attr) for attr, wire in _FIELD_TO_WIRE.items()
-        }
+        return {wire: getattr(self, attr) for attr, wire in _FIELD_TO_WIRE.items()}
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Finding":
+    def from_dict(cls, data: dict[str, Any]) -> Finding:
         """Build a :class:`Finding` from a camelCase wire dict.
 
         Missing optional keys (``suggestion``) default to ``None``. Unknown keys

@@ -55,9 +55,7 @@ def test_provider_complete_signature():
         "cache_prefix",
     ]
     # accepts arbitrary provider options
-    assert any(
-        p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-    )
+    assert any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
 
 
 def test_provider_declares_name_and_model():

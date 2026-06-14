@@ -104,9 +104,7 @@ def _summary(findings: list[Finding], conclusion: str) -> str:
     by_sev: dict[str, int] = {}
     for f in findings:
         by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
-    breakdown = ", ".join(
-        f"{by_sev[sev]} {sev}" for sev in SEVERITIES if sev in by_sev
-    )
+    breakdown = ", ".join(f"{by_sev[sev]} {sev}" for sev in SEVERITIES if sev in by_sev)
     return (
         f"openrabbit found {len(findings)} finding(s) ({breakdown}). "
         f"Conclusion: {conclusion}."
@@ -167,9 +165,7 @@ def post_check_run(
     payload["output"]["annotations"] = all_annotations[:_MAX_ANNOTATIONS_PER_REQUEST]
 
     url = adapter._rest_url(f"/repos/{adapter.repo.slug}/check-runs")
-    resp = adapter._client().post(
-        url, headers=adapter._headers(), json=payload
-    )
+    resp = adapter._client().post(url, headers=adapter._headers(), json=payload)
     adapter._raise_for(resp, "post_check_run")
     created = resp.json()
 
@@ -186,9 +182,7 @@ def _append_annotations(
     remaining: list[dict[str, Any]],
 ) -> None:
     """PATCH the remaining annotations onto an existing check run (batches of 50)."""
-    url = adapter._rest_url(
-        f"/repos/{adapter.repo.slug}/check-runs/{check_run_id}"
-    )
+    url = adapter._rest_url(f"/repos/{adapter.repo.slug}/check-runs/{check_run_id}")
     for start in range(0, len(remaining), _MAX_ANNOTATIONS_PER_REQUEST):
         batch = remaining[start : start + _MAX_ANNOTATIONS_PER_REQUEST]
         body = {

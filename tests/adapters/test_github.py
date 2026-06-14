@@ -56,8 +56,14 @@ class FakeResponse:
 
 
 class RecordedRequest:
-    def __init__(self, method: str, url: str, *, json: Any = None,
-                 headers: Optional[dict[str, str]] = None) -> None:
+    def __init__(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: Any = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> None:
         self.method = method
         self.url = url
         self.json = json
@@ -80,8 +86,7 @@ class FakeClient:
 
     def _handle(self, method: str, url: str, **kw: Any) -> FakeResponse:
         self.requests.append(
-            RecordedRequest(method, url, json=kw.get("json"),
-                            headers=kw.get("headers"))
+            RecordedRequest(method, url, json=kw.get("json"), headers=kw.get("headers"))
         )
         for m, substr, resp in self.routes:
             if m == method and substr in url:
@@ -100,7 +105,7 @@ class FakeClient:
     def close(self) -> None:
         self.closed = True
 
-    def __enter__(self) -> "FakeClient":
+    def __enter__(self) -> FakeClient:
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -227,7 +232,9 @@ def test_build_review_comment_no_suggestion_has_no_fence():
 # --------------------------------------------------------------------------- #
 def test_fetch_pr_diff_requests_diff_media_type():
     diff_text = "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n"
-    client = FakeClient([("GET", "/repos/acme/widget/pulls/7", FakeResponse(200, diff_text))])
+    client = FakeClient(
+        [("GET", "/repos/acme/widget/pulls/7", FakeResponse(200, diff_text))]
+    )
     adapter = make_adapter(client)
     out = adapter.fetch_pr_diff()
     assert out == diff_text
@@ -239,12 +246,24 @@ def test_fetch_pr_diff_requests_diff_media_type():
 
 def test_fetch_changed_files_parses_into_dataclasses():
     files_payload = [
-        {"filename": "src/a.py", "status": "modified", "additions": 3,
-         "deletions": 1, "patch": "@@ -1 +1 @@"},
-        {"filename": "src/b.py", "status": "added", "additions": 9,
-         "deletions": 0, "patch": "@@ -0,0 +1,9 @@"},
+        {
+            "filename": "src/a.py",
+            "status": "modified",
+            "additions": 3,
+            "deletions": 1,
+            "patch": "@@ -1 +1 @@",
+        },
+        {
+            "filename": "src/b.py",
+            "status": "added",
+            "additions": 9,
+            "deletions": 0,
+            "patch": "@@ -0,0 +1,9 @@",
+        },
     ]
-    client = FakeClient([("GET", "/repos/acme/widget/pulls/7/files", FakeResponse(200, files_payload))])
+    client = FakeClient(
+        [("GET", "/repos/acme/widget/pulls/7/files", FakeResponse(200, files_payload))]
+    )
     adapter = make_adapter(client)
     files = adapter.fetch_changed_files()
     assert all(isinstance(f, ChangedFile) for f in files)
@@ -254,7 +273,15 @@ def test_fetch_changed_files_parses_into_dataclasses():
 
 
 def test_fetch_raises_githuberror_on_http_error():
-    client = FakeClient([("GET", "/repos/acme/widget/pulls/7", FakeResponse(404, {"message": "Not Found"}))])
+    client = FakeClient(
+        [
+            (
+                "GET",
+                "/repos/acme/widget/pulls/7",
+                FakeResponse(404, {"message": "Not Found"}),
+            )
+        ]
+    )
     adapter = make_adapter(client)
     with pytest.raises(GitHubError):
         adapter.fetch_pr_diff()
@@ -266,8 +293,13 @@ def test_fetch_raises_githuberror_on_http_error():
 def test_post_review_single_post_with_batched_comments():
     findings = [
         make_finding(file="src/a.py", start_line=1, end_line=1, fingerprint="f1"),
-        make_finding(file="src/b.py", start_line=5, end_line=9, fingerprint="f2",
-                     suggestion="ok = True"),
+        make_finding(
+            file="src/b.py",
+            start_line=5,
+            end_line=9,
+            fingerprint="f2",
+            suggestion="ok = True",
+        ),
     ]
     resp = FakeResponse(200, {"id": 555, "state": "COMMENTED"})
     client = FakeClient([("POST", "/repos/acme/widget/pulls/7/reviews", resp)])
@@ -338,10 +370,12 @@ def test_post_review_empty_findings_posts_summary_only():
 def test_sticky_walkthrough_creates_when_absent():
     list_resp = FakeResponse(200, [])  # no existing issue comments
     create_resp = FakeResponse(201, {"id": 101, "body": "x"})
-    client = FakeClient([
-        ("GET", "/repos/acme/widget/issues/7/comments", list_resp),
-        ("POST", "/repos/acme/widget/issues/7/comments", create_resp),
-    ])
+    client = FakeClient(
+        [
+            ("GET", "/repos/acme/widget/issues/7/comments", list_resp),
+            ("POST", "/repos/acme/widget/issues/7/comments", create_resp),
+        ]
+    )
     adapter = make_adapter(client)
     out = adapter.upsert_sticky_walkthrough("## Walkthrough\nbody")
 
@@ -360,10 +394,12 @@ def test_sticky_walkthrough_updates_existing_bot_comment():
     ]
     list_resp = FakeResponse(200, existing)
     update_resp = FakeResponse(200, {"id": 77, "body": "new"})
-    client = FakeClient([
-        ("GET", "/repos/acme/widget/issues/7/comments", list_resp),
-        ("PATCH", "/repos/acme/widget/issues/comments/77", update_resp),
-    ])
+    client = FakeClient(
+        [
+            ("GET", "/repos/acme/widget/issues/7/comments", list_resp),
+            ("PATCH", "/repos/acme/widget/issues/comments/77", update_resp),
+        ]
+    )
     adapter = make_adapter(client)
     out = adapter.upsert_sticky_walkthrough("## Walkthrough\nfresh")
 
@@ -386,7 +422,9 @@ def test_sticky_walkthrough_marker_is_hidden_html_comment():
 # GraphQL: resolve thread + minimize comment                                   #
 # --------------------------------------------------------------------------- #
 def test_resolve_review_thread_graphql_payload():
-    resp = FakeResponse(200, {"data": {"resolveReviewThread": {"thread": {"isResolved": True}}}})
+    resp = FakeResponse(
+        200, {"data": {"resolveReviewThread": {"thread": {"isResolved": True}}}}
+    )
     client = FakeClient([("POST", "/graphql", resp)])
     adapter = make_adapter(client)
     ok = adapter.resolve_review_thread("THREAD_abc")
@@ -398,7 +436,9 @@ def test_resolve_review_thread_graphql_payload():
 
 
 def test_minimize_comment_uses_outdated_classifier():
-    resp = FakeResponse(200, {"data": {"minimizeComment": {"minimizedComment": {"isMinimized": True}}}})
+    resp = FakeResponse(
+        200, {"data": {"minimizeComment": {"minimizedComment": {"isMinimized": True}}}}
+    )
     client = FakeClient([("POST", "/graphql", resp)])
     adapter = make_adapter(client)
     ok = adapter.minimize_comment("COMMENT_xyz", "OUTDATED")
@@ -410,7 +450,9 @@ def test_minimize_comment_uses_outdated_classifier():
 
 
 def test_minimize_comment_defaults_to_outdated():
-    resp = FakeResponse(200, {"data": {"minimizeComment": {"minimizedComment": {"isMinimized": True}}}})
+    resp = FakeResponse(
+        200, {"data": {"minimizeComment": {"minimizedComment": {"isMinimized": True}}}}
+    )
     client = FakeClient([("POST", "/graphql", resp)])
     adapter = make_adapter(client)
     adapter.minimize_comment("COMMENT_1")
@@ -444,9 +486,14 @@ def _threads_graphql_payload(threads: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _thread_node(thread_id: str, fingerprint: Optional[str], *,
-                 resolved: bool = False, outdated: bool = False,
-                 login: str = "github-actions[bot]") -> dict[str, Any]:
+def _thread_node(
+    thread_id: str,
+    fingerprint: Optional[str],
+    *,
+    resolved: bool = False,
+    outdated: bool = False,
+    login: str = "github-actions[bot]",
+) -> dict[str, Any]:
     body = "some review comment"
     if fingerprint:
         body += f"\n<!-- openrabbit:fp={fingerprint} -->"
@@ -499,17 +546,31 @@ def test_list_bot_review_threads_filters_non_bot_authors():
 
 def test_dedup_findings_drops_already_posted_fingerprints():
     posted = [
-        ReviewThread(thread_id="T1", comment_id="c1", fingerprint="fp-keep-open",
-                     is_resolved=False, is_outdated=False, path="src/a.py",
-                     body="b"),
-        ReviewThread(thread_id="T2", comment_id="c2", fingerprint="fp-resolved",
-                     is_resolved=True, is_outdated=False, path="src/a.py",
-                     body="b"),
+        ReviewThread(
+            thread_id="T1",
+            comment_id="c1",
+            fingerprint="fp-keep-open",
+            is_resolved=False,
+            is_outdated=False,
+            path="src/a.py",
+            body="b",
+        ),
+        ReviewThread(
+            thread_id="T2",
+            comment_id="c2",
+            fingerprint="fp-resolved",
+            is_resolved=True,
+            is_outdated=False,
+            path="src/a.py",
+            body="b",
+        ),
     ]
     findings = [
-        make_finding(fingerprint="fp-keep-open"),   # already posted & open -> drop
-        make_finding(fingerprint="fp-resolved"),    # posted but resolved -> keep? no: stay suppressed
-        make_finding(fingerprint="fp-new"),         # brand new -> keep
+        make_finding(fingerprint="fp-keep-open"),  # already posted & open -> drop
+        make_finding(
+            fingerprint="fp-resolved"
+        ),  # posted but resolved -> keep? no: stay suppressed
+        make_finding(fingerprint="fp-new"),  # brand new -> keep
     ]
     adapter = make_adapter(FakeClient([]))
     fresh = adapter.dedup_findings(findings, posted)
@@ -529,10 +590,24 @@ def test_dedup_findings_keeps_all_when_no_prior_threads():
 
 def test_outdated_threads_for_fingerprints_selects_superseded():
     posted = [
-        ReviewThread(thread_id="T1", comment_id="c1", fingerprint="fp-gone",
-                     is_resolved=False, is_outdated=False, path="src/a.py", body="b"),
-        ReviewThread(thread_id="T2", comment_id="c2", fingerprint="fp-still",
-                     is_resolved=False, is_outdated=False, path="src/a.py", body="b"),
+        ReviewThread(
+            thread_id="T1",
+            comment_id="c1",
+            fingerprint="fp-gone",
+            is_resolved=False,
+            is_outdated=False,
+            path="src/a.py",
+            body="b",
+        ),
+        ReviewThread(
+            thread_id="T2",
+            comment_id="c2",
+            fingerprint="fp-still",
+            is_resolved=False,
+            is_outdated=False,
+            path="src/a.py",
+            body="b",
+        ),
     ]
     current = [make_finding(fingerprint="fp-still")]
     adapter = make_adapter(FakeClient([]))
@@ -554,8 +629,7 @@ class SequencedClient(FakeClient):
 
     def _handle(self, method: str, url: str, **kw: Any) -> FakeResponse:
         self.requests.append(
-            RecordedRequest(method, url, json=kw.get("json"),
-                            headers=kw.get("headers"))
+            RecordedRequest(method, url, json=kw.get("json"), headers=kw.get("headers"))
         )
         for substr, responses in self.sequence.items():
             if substr in url and responses:
@@ -571,8 +645,9 @@ def test_list_bot_review_threads_paginates():
         "endCursor": "CURSOR_1",
     }
     page2 = _threads_graphql_payload([_thread_node("T2", "fp-2")])
-    client = SequencedClient({"/graphql": [FakeResponse(200, page1),
-                                           FakeResponse(200, page2)]})
+    client = SequencedClient(
+        {"/graphql": [FakeResponse(200, page1), FakeResponse(200, page2)]}
+    )
     adapter = make_adapter(client)
     threads = adapter.list_bot_review_threads()
     assert {t.thread_id for t in threads} == {"T1", "T2"}
@@ -582,8 +657,12 @@ def test_list_bot_review_threads_paginates():
 
 
 def test_list_bot_review_threads_skips_threads_without_comments():
-    node = {"id": "T0", "isResolved": False, "isOutdated": False,
-            "comments": {"nodes": []}}
+    node = {
+        "id": "T0",
+        "isResolved": False,
+        "isOutdated": False,
+        "comments": {"nodes": []},
+    }
     resp = FakeResponse(200, _threads_graphql_payload([node]))
     client = FakeClient([("POST", "/graphql", resp)])
     adapter = make_adapter(client, bot_login="github-actions[bot]")
@@ -668,5 +747,6 @@ def test_module_imports_without_httpx(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", guard)
     import openrabbit.adapters.github as mod
+
     importlib.reload(mod)
     assert hasattr(mod, "GitHubAdapter")

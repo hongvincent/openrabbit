@@ -1,0 +1,81 @@
+# openrabbit — OpenSSF Scorecard (PRD §12 self-supply-chain).
+#
+# Runs the OpenSSF Scorecard analysis so the repo publishes a Scorecard badge and
+# is itself vetted by the same signals openrabbit uses to vet its dependencies
+# (Maintained / Contributors / Signed-Releases / Pinned-Deps / Branch-Protection).
+#
+# Security posture (SPEC §12 CI hardening):
+#   * Top-level permissions are least-privilege `read-all`.
+#   * The analysis job elevates only:
+#       - security-events: write   -> upload the SARIF result to the Security tab
+#     `id-token: write` (OIDC, needed only to PUBLISH the signed result outward) is
+#     intentionally NOT granted: openrabbit is a PRIVATE repo (design spec §1.1),
+#     so `publish_results` is gated off below (a private repo cannot resolve the
+#     public Scorecard badge, and publishing would surface repo metadata to the
+#     public OpenSSF API against the private-repo threat model). Re-enable both
+#     when/if the repo is made public.
+#   * Every third-party action is SHA-pinned to a 40-hex commit (trailing version
+#     comment); bump via Dependabot.
+name: OpenSSF Scorecard
+
+on:
+  # Weekly schedule keeps the badge fresh even with no pushes.
+  schedule:
+    - cron: "37 5 * * 1"   # Mondays 05:37 UTC
+  # Re-score on push to the default branch so regressions surface immediately.
+  push:
+    branches: [main]
+  # Allow a manual run from the Actions tab.
+  workflow_dispatch:
+
+# Least privilege by default; the analysis job elevates only what it needs.
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to upload the results to the code-scanning (Security) tab.
+      security-events: write
+      # NOTE: `id-token: write` (OIDC) is deliberately omitted — it is only needed
+      # to PUBLISH the signed result outward, which is gated off on this private
+      # repo (see `publish_results` below). Restore it alongside publishing if the
+      # repo is made public.
+      # Read the repository contents to analyze.
+      contents: read
+      # Read action/actions metadata for the analysis.
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@62b2cac7ed8198b15735ed49ab1e5cf35480ba46  # v2.4.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publish the signed result outward (powers the public README badge) ONLY
+          # when the repo is public. openrabbit is private by design (spec §1.1), so
+          # this resolves to `false`: a private repo cannot surface a public badge,
+          # and publishing would leak repo metadata to the public OpenSSF API. Flip
+          # automatically if/when the repo is made public; restore `id-token: write`
+          # in the job permissions above when this is true.
+          publish_results: ${{ github.event.repository.private == false }}
+
+      # Upload the results as a workflow artifact (retained briefly) so they are
+      # available even if the Security-tab upload is gated.
+      - name: Upload artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      # Upload to the code-scanning (Security) tab.
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@4e828ff8d448a8a6e532957b1811f387a63867e8  # v3.29.4
+        with:
+          sarif_file: results.sarif

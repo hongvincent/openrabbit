@@ -23,7 +23,9 @@ break out of a table cell or inject markup.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from itertools import pairwise
+from typing import Any, Optional
 
 from openrabbit.findings import Finding
 from openrabbit.pipeline.emit import render_summary_markdown
@@ -91,7 +93,7 @@ def _describe_group(plans: list[FilePlan]) -> str:
     Deterministic: when a group mixes types the dominant (most common, then
     alphabetical for ties) type wins; security-sensitive paths get a hint.
     """
-    counts: "OrderedDict[str, int]" = OrderedDict()
+    counts: OrderedDict[str, int] = OrderedDict()
     for p in plans:
         counts[p.file_type] = counts.get(p.file_type, 0) + 1
     dominant = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
@@ -144,7 +146,7 @@ def _filenames(plans: list[FilePlan]) -> str:
 
 def _grouped_table(file_plans: list[FilePlan]) -> str:
     """Build the grouped changed-files table (bounded)."""
-    groups: "OrderedDict[str, list[FilePlan]]" = OrderedDict()
+    groups: OrderedDict[str, list[FilePlan]] = OrderedDict()
     for plan in file_plans:
         groups.setdefault(_group_key(plan.path), []).append(plan)
 
@@ -282,7 +284,7 @@ def _render_mermaid(file_plans: list[FilePlan]) -> str:
         # other markdown/HTML control chars).
         label = _sanitize(fname).replace('"', "&quot;")
         lines.append(f'    {node}["{label}"]')
-    for (a, _), (b, _) in zip(labels, labels[1:]):
+    for (a, _), (b, _) in pairwise(labels):
         lines.append(f"    {a} --> {b}")
     lines.append("```")
     return "\n".join(lines)
@@ -291,9 +293,7 @@ def _render_mermaid(file_plans: list[FilePlan]) -> str:
 # --------------------------------------------------------------------------- #
 # high-level summary                                                            #
 # --------------------------------------------------------------------------- #
-def _summary(
-    pr_context: Mapping[str, Any], file_plans: list[FilePlan]
-) -> str:
+def _summary(pr_context: Mapping[str, Any], file_plans: list[FilePlan]) -> str:
     """2-3 sentence deterministic high-level summary of the change."""
     n_files = len(file_plans)
     n_groups = len({_group_key(p.path) for p in file_plans})
@@ -302,9 +302,7 @@ def _summary(
     title = str(pr_context.get("title", "") or "")
     sentences: list[str] = []
     if title:
-        sentences.append(
-            f"**{_sanitize(title, limit=_MAX_TITLE_CHARS)}**"
-        )
+        sentences.append(f"**{_sanitize(title, limit=_MAX_TITLE_CHARS)}**")
 
     if n_files == 0:
         sentences.append("No reviewable file changes were detected.")
@@ -312,13 +310,10 @@ def _summary(
         file_word = "file" if n_files == 1 else "files"
         group_word = "area" if n_groups == 1 else "areas"
         sentences.append(
-            f"This change touches {n_files} {file_word} "
-            f"across {n_groups} {group_word}."
+            f"This change touches {n_files} {file_word} across {n_groups} {group_word}."
         )
         if types:
-            sentences.append(
-                "Affected categories: " + ", ".join(types) + "."
-            )
+            sentences.append("Affected categories: " + ", ".join(types) + ".")
 
     return " ".join(sentences)
 

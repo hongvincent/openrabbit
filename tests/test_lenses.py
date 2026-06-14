@@ -119,27 +119,14 @@ def test_parse_skill_missing_name_falls_back_to_dir_name(tmp_path):
 
 def test_parse_skill_allowed_tools_as_csv_string(tmp_path):
     # agentskills.io permits a comma-separated string for allowed-tools.
-    text = (
-        "---\n"
-        "name: correctness\n"
-        "allowed-tools: Read, Grep, Bash\n"
-        "---\n\n"
-        "Body.\n"
-    )
+    text = "---\nname: correctness\nallowed-tools: Read, Grep, Bash\n---\n\nBody.\n"
     p = _write_skill(tmp_path, "correctness", text)
     lens = parse_skill(p)
     assert lens.allowed_tools == ["Read", "Grep", "Bash"]
 
 
 def test_parse_skill_accepts_underscore_allowed_tools_key(tmp_path):
-    text = (
-        "---\n"
-        "name: correctness\n"
-        "allowed_tools:\n"
-        "  - Read\n"
-        "---\n\n"
-        "Body.\n"
-    )
+    text = "---\nname: correctness\nallowed_tools:\n  - Read\n---\n\nBody.\n"
     p = _write_skill(tmp_path, "correctness", text)
     lens = parse_skill(p)
     assert lens.allowed_tools == ["Read"]

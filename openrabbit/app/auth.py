@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Optional, Union
 
 #: GitHub's default REST API base. Overridable for GitHub Enterprise Server.
@@ -146,8 +146,7 @@ def installation_token(
             payload = response.json()
     except httpx.HTTPStatusError as exc:
         raise AppAuthError(
-            f"installation-token exchange returned an error status: "
-            f"{_status_of(exc)}"
+            f"installation-token exchange returned an error status: {_status_of(exc)}"
         ) from exc
     except httpx.HTTPError as exc:  # transport-level (connect/timeout/...)
         # Keep the message generic: some httpx error reprs embed the request URL,
@@ -159,14 +158,10 @@ def installation_token(
         ) from exc
 
     if not isinstance(payload, dict) or not payload.get("token"):
-        raise AppAuthError(
-            "installation-token response missing the 'token' field"
-        )
+        raise AppAuthError("installation-token response missing the 'token' field")
     return InstallationToken(
         token=str(payload["token"]),
-        expires_at=(
-            str(payload["expires_at"]) if payload.get("expires_at") else None
-        ),
+        expires_at=(str(payload["expires_at"]) if payload.get("expires_at") else None),
     )
 
 
@@ -250,5 +245,5 @@ def _parse_iso8601(value: Optional[str]) -> Optional[float]:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.timestamp()

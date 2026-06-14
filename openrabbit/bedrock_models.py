@@ -37,7 +37,7 @@ ADAPTER_RESPONSES = "responses"
 ADAPTER_CONVERSE = "converse"
 
 
-class Severity(str, Enum):
+class Severity(str, Enum):  # noqa: UP042 — keep Enum's `str()` repr ("Severity.ERROR"); StrEnum would change it
     """Verdict severity for a model/region check."""
 
     ERROR = "error"

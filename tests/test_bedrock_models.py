@@ -154,7 +154,10 @@ def test_unknown_model_is_warning_not_error():
     verdict = validate_model_region("amazon.titan-imaginary-v9:0", "ap-northeast-2")
     assert verdict is not None
     assert verdict.severity == Severity.WARNING
-    assert "unknown" in verdict.message.lower() or "unrecognized" in verdict.message.lower()
+    assert (
+        "unknown" in verdict.message.lower()
+        or "unrecognized" in verdict.message.lower()
+    )
 
 
 def test_unknown_model_with_unknown_prefix_is_warning():
