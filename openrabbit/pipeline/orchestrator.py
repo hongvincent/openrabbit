@@ -124,6 +124,7 @@ def review(
     lens_prompts: Optional[Mapping[str, str]] = None,
     store: Optional[gate_mod.StateStore] = None,
     prior_fingerprints: Optional[set[str]] = None,
+    enclosing_fetcher: ctx.EnclosingFetcher = ctx.gather_enclosing_context,
     emit: bool = True,
 ) -> ReviewResult:
     """Run the full deterministic review spine.
@@ -147,6 +148,11 @@ def review(
         Optional :class:`StateStore` for incremental skip + post-review record.
     prior_fingerprints:
         Fingerprints from prior reviews to dedup against.
+    enclosing_fetcher:
+        Best-effort enclosing-context fetcher threaded into the finder pass
+        (``run_lenses``). Defaults to the offline-safe no-op so unit/offline
+        runs stay deterministic; the online CLI injects a real
+        :class:`~openrabbit.pipeline.enclosing.GitEnclosingFetcher`.
     """
     diff = str(pr_context.get("diff", ""))
 
@@ -180,7 +186,11 @@ def review(
     for file_plan in plan.reviewable_files:
         raw_findings.extend(
             run_lenses_mod.run_lenses(
-                finder, file_plan, prompts, prefix=prefix
+                finder,
+                file_plan,
+                prompts,
+                prefix=prefix,
+                enclosing_fetcher=enclosing_fetcher,
             )
         )
 
@@ -194,9 +204,17 @@ def review(
         high_risk_files=high_risk_files,
     )
 
-    # Stage 6 — dedup & rank.
+    # Stage 6 — dedup & rank. Union two dedup sources: GitHub-thread
+    # fingerprints (``prior_fingerprints``, may be empty before threads load)
+    # and LOCAL persisted fingerprints from prior reviews of this PR (so
+    # incremental dedup works offline / before threads load).
+    dedup_against: set[str] = set(prior_fingerprints or set())
+    repo = pr_context.get("repo")
+    number = pr_context.get("number")
+    if store is not None and repo is not None and number is not None:
+        dedup_against |= store.get_posted_fingerprints(str(repo), int(number))
     ranked = dedup_mod.dedup_and_rank(
-        verified, prior_fingerprints=prior_fingerprints
+        verified, prior_fingerprints=dedup_against
     )
 
     # Stage 7 — emit (offline payload by default).
@@ -215,13 +233,20 @@ def review(
             stats=stats,
         )
 
-    # Record incremental state after a successful review.
-    if store is not None:
-        repo = pr_context.get("repo")
-        number = pr_context.get("number")
+    # Record incremental state after a successful review. The SHA update and the
+    # kept findings' fingerprints (a local dedup source so a re-review on
+    # ``synchronize`` suppresses the same findings before GitHub threads load)
+    # are folded into a single load/save.
+    if store is not None and repo is not None and number is not None:
         head_sha = pr_context.get("head_sha")
-        if repo is not None and number is not None and head_sha is not None:
-            store.record_review(str(repo), int(number), str(head_sha))
+        kept_fps = {f.fingerprint for f in ranked} if ranked else None
+        if head_sha is not None:
+            store.record_review(
+                str(repo), int(number), str(head_sha), fingerprints=kept_fps
+            )
+        elif kept_fps:
+            # No SHA to record but still persist fingerprints.
+            store.record_posted_fingerprints(str(repo), int(number), kept_fps)
 
     return ReviewResult(
         reviewed=True,
