@@ -140,8 +140,31 @@ def test_readme_documents_security_model() -> None:
 def test_readme_documents_bedrock_model_routing() -> None:
     low = _lower(README)
     assert "nova" in low
-    assert "gpt-5.5" in low
+    # CORRECTED defaults (live-verified model switch): the README must name the
+    # NEW Nova 2 Lite finder + GPT-5.4 verifier, not the superseded nova-pro /
+    # gpt-5.5 defaults. gpt-5.5 may still be MENTIONED (both 5.4/5.5 are supported)
+    # but it must not be the named DEFAULT verifier id.
+    assert "nova-2-lite" in low or "nova 2 lite" in low
+    assert "gpt-5.4" in low
     assert "finder" in low and "verifier" in low
+
+
+def test_readme_default_model_table_uses_new_switch() -> None:
+    """The Bedrock-routing table must show the NEW defaults: a Nova 2 Lite finder
+    (Seoul) and a GPT-5.4 verifier (us-east-2). The old nova-pro finder default and
+    gpt-5.5 verifier default must be gone from the table so a reader copies the
+    live-verified routing, not the outdated one."""
+    text = _text(README)
+    low = text.lower()
+    # The finder default is Nova 2 Lite, not nova-pro.
+    assert "global.amazon.nova-2-lite-v1:0" in low or "nova-2-lite-v1:0" in low
+    # The verifier default is gpt-5.4.
+    assert "openai.gpt-5.4" in low
+    # The default verifier id must not be gpt-5.5 in the inline config snippet:
+    # the example model_roles block must route the verifier to gpt-5.4.
+    assert "verifier: { model: openai.gpt-5.5" not in low
+    # The finder default must not be the superseded nova-pro id.
+    assert "finder:   { model: amazon.nova-pro-v1:0" not in low
 
 
 def test_readme_states_trust_thesis() -> None:
@@ -204,6 +227,23 @@ def test_configuration_documents_model_roles() -> None:
     low = _lower(CONFIGURATION)
     for role in ("triage", "finder", "verifier"):
         assert role in low, f"configuration.md must document the {role} role"
+
+
+def test_configuration_model_roles_use_new_switch_defaults() -> None:
+    """configuration.md's model_roles reference must show the CORRECTED defaults
+    (live-verified switch): Nova 2 Lite triage + finder (Seoul), GPT-5.4 verifier
+    (us-east-2). The superseded nova-pro finder / gpt-5.5 verifier defaults must be
+    gone from the reference block + the role table so the docs match the registry,
+    pricing, and .openrabbit.example.yaml."""
+    text = _text(CONFIGURATION)
+    low = text.lower()
+    assert "global.amazon.nova-2-lite-v1:0" in low
+    assert "openai.gpt-5.4" in low
+    # The default finder/verifier ids must not be the old nova-pro / gpt-5.5.
+    assert "amazon.nova-pro-v1:0" not in low
+    # gpt-5.5 may appear only where historically accurate (both 5.4/5.5 supported),
+    # never as the default verifier id in the role table.
+    assert "`openai.gpt-5.5` @ `us-east-2`" not in text
 
 
 def test_configuration_marks_external_tools_reserved() -> None:

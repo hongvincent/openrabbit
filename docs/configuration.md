@@ -30,19 +30,23 @@ review:
 
 model_roles:                     # role -> { model, region, ...provider opts }
   triage:
-    model: amazon.nova-lite-v1:0
-    region: ap-northeast-2
+    model: global.amazon.nova-2-lite-v1:0   # Nova 2 Lite via "global." profile
+    region: ap-northeast-2                  # Seoul (live-verified on Converse)
   finder:
-    model: amazon.nova-pro-v1:0
+    model: global.amazon.nova-2-lite-v1:0
     region: ap-northeast-2
+    # TODO: enable Nova 2 Lite low-effort reasoning once the
+    # additionalModelRequestFields (extended-thinking) shape is confirmed — the
+    # finder ships with NO reasoning_effort until then.
   verifier:
-    model: openai.gpt-5.5
+    model: openai.gpt-5.4
     region: us-east-2
     reasoning_effort: medium
     store: false
   premium:                       # optional, cost-gated; off by default
-    model: global.anthropic.claude-opus-4-6-v1
-    region: us-east-1
+    model: openai.gpt-5.4
+    region: us-east-2
+    reasoning_effort: high
     enabled: false
 
 external_tools:                  # RESERVED / not yet wired (see below)
@@ -96,17 +100,23 @@ and `region` are first-class; any other keys (`reasoning_effort`, `store`,
 
 | Role | Purpose | Default |
 |------|---------|---------|
-| `triage` | near-free yes/no on the diff (skip trivial changes) | `amazon.nova-lite-v1:0` @ `ap-northeast-2` |
-| `finder` | broad, high-recall report-all first pass | `amazon.nova-pro-v1:0` @ `ap-northeast-2` |
-| `verifier` | cross-family judge; scores + drops below the gate | `openai.gpt-5.5` @ `us-east-2` |
-| `premium` | optional, cost-gated highest-stakes role | Claude on Bedrock (off by default) |
+| `triage` | near-free yes/no on the diff (skip trivial changes) | `global.amazon.nova-2-lite-v1:0` @ `ap-northeast-2` |
+| `finder` | broad, high-recall report-all first pass | `global.amazon.nova-2-lite-v1:0` @ `ap-northeast-2` |
+| `verifier` | cross-family judge; scores + drops below the gate | `openai.gpt-5.4` @ `us-east-2` |
+| `premium` | optional, cost-gated highest-stakes role | `openai.gpt-5.4` (high) @ `us-east-2` (off by default) |
+
+The `finder` ships with **no** `reasoning_effort`: Nova 2 Lite's extended-thinking
+request shape (`additionalModelRequestFields`) is still TBD, so enabling
+low-effort reasoning on the finder is a tracked follow-up (see the `TODO` in the
+reference block above). Both `openai.gpt-5.4` and `openai.gpt-5.5` are supported
+verifier ids — the live-verified default is **gpt-5.4**.
 
 **Region validation.** Model ids are validated against
 `openrabbit.bedrock_models`:
 
-- **GPT-5.5** (`openai.*`) runs over Bedrock's OpenAI-compatible *mantle*
+- **GPT-5.4 / GPT-5.5** (`openai.*`) run over Bedrock's OpenAI-compatible *mantle*
   Responses endpoint, which physically only exists in `us-east-1` / `us-east-2`.
-  A GPT-5.5 role outside those regions is a **hard error** (the load fails).
+  An `openai.*` role outside those regions is a **hard error** (the load fails).
 - **Nova** (`amazon.*`) and **Claude** (`anthropic.*`) run over `bedrock-runtime`
   Converse with a broader, advisory region allow-list. An off-allow-list region
   is a **soft warning** (a cross-region inference profile may still reach it).
@@ -114,7 +124,8 @@ and `region` are first-class; any other keys (`reasoning_effort`, `store`,
   region/adapter, but won't block).
 
 Cross-region inference-profile prefixes (`us.`, `apac.`, `eu.`, `global.`, …) are
-understood — e.g. `us.openai.gpt-5.5` resolves to `openai.gpt-5.5`.
+understood — e.g. `us.openai.gpt-5.4` resolves to `openai.gpt-5.4`, and
+`global.amazon.nova-2-lite-v1:0` resolves to `amazon.nova-2-lite-v1:0`.
 
 ## `external_tools`
 
@@ -139,6 +150,6 @@ implemented, leave `enabled: []`.
 ## Validation
 
 `openrabbit.config.load_config` raises `ConfigError` on missing files, parse
-errors, invalid enum values, or **hard** `model_roles` problems (GPT-5.5 in an
-unsupported region). Soft `model_roles` issues never block the load; pass
+errors, invalid enum values, or **hard** `model_roles` problems (an `openai.*`
+verifier in an unsupported region). Soft `model_roles` issues never block the load; pass
 `collect_warnings=True` (or run via the CLI) to surface them.
