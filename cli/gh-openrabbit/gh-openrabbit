@@ -3,10 +3,15 @@
 # gh-openrabbit — GitHub CLI extension entrypoint (PRD §11).
 #
 # Mirrors the `claude /install-github-app` one-command onboarding UX. The Python
-# layer (`python -m openrabbit.init`, advisory-only) does ALL planning and file
-# scaffolding and performs NO network mutation. This shell wrapper is the only
-# place real `gh` mutations happen, and only on the explicit, guarded non-dry-run
-# path (`init --write --apply`). Unit tests never exercise this file.
+# layer (the `openrabbit init` CLI subcommand — equivalently `python -m
+# openrabbit.init`, advisory-only) does ALL planning and file scaffolding and
+# performs NO network mutation. This shell wrapper is the only place real `gh`
+# mutations happen, and only on the explicit, guarded non-dry-run path (`init
+# --write --apply`). Unit tests never exercise the gh-mutation path.
+#
+# Onboarding is target-repo-independent: `run_init` resolves openrabbit via an
+# installed binary, a colocated checkout, or `uvx --from openrabbit` (NEVER the
+# target repo's pyproject) — see `resolve_run_cmd` below.
 #
 # Usage:
 #   gh openrabbit init                 # dry-run: print the plan + file contents
@@ -22,15 +27,146 @@ set -euo pipefail
 # --------------------------------------------------------------------------- #
 # locate the openrabbit python package                                        #
 # --------------------------------------------------------------------------- #
-# Prefer `uv run` (the project's runner); fall back to `python -m`. The extension
-# is expected to run from within (or be pointed at) a checkout of openrabbit, or
-# with openrabbit installed on PATH.
-run_init() {
-  if command -v uv >/dev/null 2>&1 && [ -f "pyproject.toml" ]; then
-    uv run python -m openrabbit.init "$@"
-  else
-    python3 -m openrabbit.init "$@"
+# Resolve HOW to run `openrabbit init` WITHOUT depending on the TARGET repo (the
+# teammate's repo being onboarded almost never has openrabbit installed or a
+# pyproject.toml that lists it). Resolution order (each independent of the target
+# repo's pyproject):
+#
+#   1. an installed `openrabbit` binary on PATH                  → run it directly
+#   2. an openrabbit CHECKOUT we ship from / are pointed at      → `uv run` there
+#      (OPENRABBIT_HOME, else a pyproject.toml beside this script)
+#   3. otherwise fetch the published `openrabbit` distribution   → `uvx --from
+#      openrabbit openrabbit ...` (uvx installs openrabbit itself, so it never
+#      needs the target repo to provide it)
+#
+# `resolve_run_cmd` prints the chosen argv prefix (one token per line) so the
+# logic is unit-testable in isolation; `run_init` consumes it.
+#
+# Directory holding THIS script (the extension's own checkout), resolved without
+# relying on the caller's cwd.
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)"
+
+resolve_run_cmd() {
+  # 1) Installed openrabbit binary — cheapest, no fetch.
+  if command -v openrabbit >/dev/null 2>&1; then
+    printf '%s\n' openrabbit
+    return 0
   fi
+  # 2) A colocated openrabbit checkout (env override, else this repo's root).
+  local home="${OPENRABBIT_HOME:-}"
+  if [ -z "$home" ]; then
+    # The extension lives at <repo>/cli/gh-openrabbit/; the project root (two up)
+    # is the openrabbit checkout when we are running from a source tree.
+    local candidate
+    candidate="$(cd "$_SCRIPT_DIR/../.." >/dev/null 2>&1 && pwd || true)"
+    if [ -n "$candidate" ] && [ -f "$candidate/pyproject.toml" ] \
+       && grep -q '^name = "openrabbit"' "$candidate/pyproject.toml" 2>/dev/null; then
+      home="$candidate"
+    fi
+  fi
+  if [ -n "$home" ] && command -v uv >/dev/null 2>&1 \
+     && [ -f "$home/pyproject.toml" ]; then
+    printf '%s\n' uv run --project "$home" openrabbit
+    return 0
+  fi
+  # 3) Fetch the published distribution — independent of the target repo entirely.
+  if command -v uvx >/dev/null 2>&1; then
+    printf '%s\n' uvx --from openrabbit openrabbit
+    return 0
+  fi
+  echo "error: cannot run openrabbit — install it (pipx install openrabbit), or" >&2
+  echo "       provide uv/uvx on PATH, or set OPENRABBIT_HOME to a checkout." >&2
+  return 3
+}
+
+run_init() {
+  local -a cmd=()
+  while IFS= read -r tok; do
+    [ -n "$tok" ] && cmd+=("$tok")
+  done < <(resolve_run_cmd)
+  if [ "${#cmd[@]}" -eq 0 ]; then
+    return 3
+  fi
+  # Debug hook: print the resolved command (no Python/uvx/gh invoked) and stop.
+  # Used by the offline resolution tests; never set in normal use.
+  if [ "${OPENRABBIT_PRINT_RUN_CMD:-0}" = "1" ]; then
+    printf '%s' "${cmd[0]}"
+    printf ' %s' "${cmd[@]:1}"
+    printf '\n'
+    return 0
+  fi
+  "${cmd[@]}" init "$@"
+}
+
+# --------------------------------------------------------------------------- #
+# doctor — validate the keyless OIDC wiring (finding #4)                        #
+# --------------------------------------------------------------------------- #
+# `openrabbit_check_trust_policy <json>` returns 0 IFF the trust policy contains
+# the GitHub OIDC federated principal AND the web-identity assume action — i.e.
+# the keyless GitHub Actions -> AWS STS path is actually configured. This is the
+# single failure that silently breaks reviews: a role exists, the secret is set,
+# but the role won't let GitHub assume it. Pure text inspection (no AWS call) so
+# the logic is unit-testable; `doctor` feeds it either a file (--trust-policy-file)
+# or the live `aws iam get-role` output.
+OIDC_PROVIDER_HOST="token.actions.githubusercontent.com"
+
+openrabbit_check_trust_policy() {
+  local policy="$1"
+  # Federated principal must reference the GitHub Actions OIDC provider...
+  if ! printf '%s' "$policy" | grep -q "oidc-provider/${OIDC_PROVIDER_HOST}"; then
+    return 1
+  fi
+  # ...and the role must be assumable via web identity (OIDC), not only sts:AssumeRole.
+  if ! printf '%s' "$policy" | grep -q "AssumeRoleWithWebIdentity"; then
+    return 1
+  fi
+  return 0
+}
+
+run_doctor() {
+  local trust_file="$1" role_arn="$2"
+  local policy=""
+  if [ -n "$trust_file" ]; then
+    if [ ! -f "$trust_file" ]; then
+      echo "error: --trust-policy-file '$trust_file' not found" >&2
+      return 2
+    fi
+    policy="$(cat "$trust_file")"
+  else
+    # No file given: read the live trust policy from AWS (needs the role + creds).
+    if [ -z "$role_arn" ]; then
+      echo "error: doctor needs --role-arn=<arn> (or --trust-policy-file=<f>) to" >&2
+      echo "       check the OIDC trust policy of the role openrabbit assumes." >&2
+      return 2
+    fi
+    if ! command -v aws >/dev/null 2>&1; then
+      echo "error: doctor needs the AWS CLI on PATH to read the live trust policy" >&2
+      echo "       (or pass --trust-policy-file=<f> to validate a saved policy)." >&2
+      return 2
+    fi
+    local role_name="${role_arn##*/}"
+    policy="$(aws iam get-role --role-name "$role_name" \
+      --query 'Role.AssumeRolePolicyDocument' --output json 2>/dev/null || true)"
+    if [ -z "$policy" ]; then
+      echo "error: could not read the trust policy for role '$role_name' via aws" >&2
+      echo "       iam get-role (check the ARN + your AWS credentials)." >&2
+      return 2
+    fi
+  fi
+
+  if openrabbit_check_trust_policy "$policy"; then
+    echo "openrabbit doctor: OK — GitHub OIDC trust policy is present" >&2
+    echo "                  (federated ${OIDC_PROVIDER_HOST} +" >&2
+    echo "                   sts:AssumeRoleWithWebIdentity)." >&2
+    return 0
+  fi
+  echo "openrabbit doctor: FAIL — the role's OIDC trust policy is MISSING." >&2
+  echo "  The keyless GitHub Actions -> AWS STS path is not configured: the trust" >&2
+  echo "  policy must allow the Federated principal" >&2
+  echo "  arn:aws:iam::<ACCOUNT_ID>:oidc-provider/${OIDC_PROVIDER_HOST} to" >&2
+  echo "  sts:AssumeRoleWithWebIdentity. Run \`gh openrabbit init\` and apply the" >&2
+  echo "  printed OIDC trust-policy snippet, then re-run \`gh openrabbit doctor\`." >&2
+  return 1
 }
 
 # --------------------------------------------------------------------------- #
@@ -43,8 +179,15 @@ APPLY=0
 WRITE=0
 PASSTHROUGH=()
 AWS_ROLE_ARN="${OPENRABBIT_AWS_ROLE_ARN:-}"
+TRUST_POLICY_FILE=""
+EXPECT_TRUST_VALUE=0
 
 for arg in "$@"; do
+  if [ "$EXPECT_TRUST_VALUE" -eq 1 ]; then
+    TRUST_POLICY_FILE="$arg"
+    EXPECT_TRUST_VALUE=0
+    continue
+  fi
   case "$arg" in
     --apply)
       APPLY=1
@@ -56,11 +199,21 @@ for arg in "$@"; do
     --role-arn=*)
       AWS_ROLE_ARN="${arg#*=}"
       ;;
+    --trust-policy-file=*)
+      TRUST_POLICY_FILE="${arg#*=}"
+      ;;
+    --trust-policy-file)
+      EXPECT_TRUST_VALUE=1
+      ;;
     *)
       PASSTHROUGH+=("$arg")
       ;;
   esac
 done
+if [ "$EXPECT_TRUST_VALUE" -eq 1 ]; then
+  echo "error: --trust-policy-file requires a path" >&2
+  exit 2
+fi
 
 case "$SUBCMD" in
   init)
@@ -107,7 +260,16 @@ case "$SUBCMD" in
       #    onboarding non-destructive by default.
       echo "openrabbit: secret AWS_ROLE_ARN set. Review the printed wiring plan" >&2
       echo "           for the OIDC trust policy + optional ruleset step." >&2
+      echo "openrabbit: next, validate the keyless wiring with:" >&2
+      echo "             gh openrabbit doctor --role-arn=$AWS_ROLE_ARN" >&2
     fi
+    ;;
+  doctor)
+    # Validate the keyless OIDC trust policy is actually configured (finding #4):
+    # --apply only SETS the secret; it cannot prove the IAM role trusts GitHub's
+    # OIDC. `doctor` closes that gap. Read-only (aws iam get-role); no mutation.
+    run_doctor "$TRUST_POLICY_FILE" "$AWS_ROLE_ARN"
+    exit $?
     ;;
   help|--help|-h|"")
     cat >&2 <<'USAGE'
@@ -117,14 +279,19 @@ Commands:
   init                  Print the onboarding plan (dry-run; writes nothing).
   init --write          Scaffold .openrabbit.yaml + the SHA-pinned caller workflow.
   init --write --apply  Also set the AWS_ROLE_ARN secret via gh (guarded).
+  doctor                Validate the keyless OIDC trust policy is configured
+                        (fails if the role does not trust GitHub Actions OIDC).
 
 Flags:
   --role-arn=<arn>      IAM role ARN for keyless Bedrock (or OPENRABBIT_AWS_ROLE_ARN).
   --force               Overwrite existing scaffolded files when writing.
   --aws-region=<r>      Primary region for OIDC/STS + verifier (default us-east-2).
+  --trust-policy-file=<f>  (doctor) validate a saved trust policy instead of
+                        reading it live via `aws iam get-role`.
 
-The Python layer is advisory-only and performs NO network mutation; gh calls
-happen only on the explicit `--apply` path here.
+The Python layer is advisory-only and performs NO network mutation; the only
+network steps are the guarded `init --apply` (gh secret set) and `doctor`'s
+read-only `aws iam get-role`.
 USAGE
     ;;
   *)

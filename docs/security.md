@@ -73,12 +73,13 @@ code. Forked PRs run untrusted code with access to secrets.
 - **Forked-PR safety.** Reviews run on `pull_request` (not `pull_request_target`)
   so a fork's code never runs *with* repository secrets. External-contributor PRs
   do not receive secrets.
-- **Secret scanning.** `gitleaks` is included in the *recommended* `external_tools`
-  allow-list (see `.openrabbit.example.yaml`) so that, once enabled, secrets
-  accidentally added in a diff are surfaced as findings. It is a config-surfaced
-  grader (planned runtime wiring), not enabled by default: the shipped code
-  default for `external_tools.enabled` is empty, so opt in per-repo via
-  `.openrabbit.yaml`.
+- **Secret scanning.** `gitleaks` is the *intended* secret-scanning grader for the
+  `external_tools` block. That block is currently **reserved / not yet wired**: the
+  pipeline does not run these graders or inject their output into the review, and
+  the shipped default for `external_tools.enabled` is empty (`openrabbit init`
+  scaffolds it as a commented, reserved block). Until the runtime plumbing lands,
+  listing `gitleaks` here has no effect — rely on a dedicated secret scanner (e.g.
+  GitHub secret scanning / a standalone `gitleaks` action) in the meantime.
 
 ### 4. Tool / MCP attack surface
 

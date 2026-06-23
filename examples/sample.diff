@@ -1,0 +1,13 @@
+diff --git a/src/api/auth.py b/src/api/auth.py
+index 1111111..2222222 100644
+--- a/src/api/auth.py
++++ b/src/api/auth.py
+@@ -10,6 +10,9 @@ def login(request):
+     user = lookup(request.user)
+     token = request.GET["token"]
+-    if token == user.token:
++    query = "SELECT * FROM users WHERE token = '" + token + "'"
++    row = db.execute(query)
++    if token == user.token:
+         return ok()
+     return deny()

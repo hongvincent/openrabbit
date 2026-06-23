@@ -45,8 +45,8 @@ model_roles:                     # role -> { model, region, ...provider opts }
     region: us-east-1
     enabled: false
 
-external_tools:                  # deterministic graders fed into review context
-  enabled: [ruff, eslint, semgrep, gitleaks]
+external_tools:                  # RESERVED / not yet wired (see below)
+  enabled: []                    # the pipeline does not run these graders yet
 
 telemetry:
   enabled: true
@@ -118,9 +118,16 @@ understood — e.g. `us.openai.gpt-5.5` resolves to `openai.gpt-5.5`.
 
 ## `external_tools`
 
-A list of deterministic graders whose output is fed into the review context as
-grounding (the model never *runs* them — they are advisory signal). Typical:
-`ruff`, `eslint`, `semgrep`, `gitleaks`.
+> **Reserved / not yet wired.** This block is a forward-looking placeholder.
+> openrabbit does **not** currently run these graders or inject their output into
+> the review context — `enabled` ships empty and `openrabbit init` scaffolds it as
+> a commented, reserved block. Listing tools here has **no effect** today; the
+> field is reserved so configs stay forward-compatible once the plumbing lands.
+
+The *intended* future behavior: a list of deterministic graders (e.g. `ruff`,
+`eslint`, `semgrep`, `gitleaks`) whose output is fed into the review context as
+grounding (the model never *runs* them — they are advisory signal). Until that is
+implemented, leave `enabled: []`.
 
 ## `telemetry`
 

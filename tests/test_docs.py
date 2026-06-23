@@ -206,6 +206,38 @@ def test_configuration_documents_model_roles() -> None:
         assert role in low, f"configuration.md must document the {role} role"
 
 
+def test_configuration_marks_external_tools_reserved() -> None:
+    """Finding #3: the docs must not claim external_tools is live grounding while
+    the pipeline does not run those graders. The `external_tools` section must be
+    explicitly flagged as reserved / not yet wired (honest docs)."""
+    text = CONFIGURATION.read_text(encoding="utf-8")
+    low = text.lower()
+    assert "external_tools" in low
+    # The section is honestly flagged as not-yet-implemented.
+    assert "reserved" in low and "not yet wired" in low, (
+        "configuration.md must flag external_tools as reserved / not yet wired"
+    )
+    # The external_tools section must say the pipeline does NOT run these graders
+    # today (honest present-tense), so a reader is not misled into thinking the
+    # output already grounds the review.
+    section = text.split("## `external_tools`", 1)[1].split("\n## ", 1)[0].lower()
+    # Markdown emphasis (e.g. `does **not** run`) must not defeat the check.
+    section_plain = section.replace("*", "")
+    assert "does not" in section_plain and (
+        "run these graders" in section_plain
+        or "run those graders" in section_plain
+        or "currently run" in section_plain
+        or "inject" in section_plain
+    ), "external_tools section must state the pipeline does not run them yet"
+    # Any 'fed into the review context' grounding claim must be framed as INTENDED
+    # / future, never as a present-tense fact.
+    if "fed into the review context" in section:
+        assert "intended" in section or "future" in section, (
+            "the 'fed into the review context' claim must be framed as intended "
+            "future behavior, not a present-tense fact"
+        )
+
+
 # --------------------------------------------------------------------------- #
 # docs/security.md — threat model                                            #
 # --------------------------------------------------------------------------- #

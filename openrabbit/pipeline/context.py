@@ -86,8 +86,15 @@ def _repo_conventions(config: Config) -> str:
     lenses = ", ".join(config.review.lenses)
     instructions = ""
     if config.review.path_instructions:
+        # path_instructions are config-as-code authored in the repo under review
+        # (attacker-controlled for a fork/external PR), so a value containing a
+        # literal </untrusted> fence must be neutralized before it lands in the
+        # cacheable SYSTEM prefix — exactly like the pr/learnings blocks — or it
+        # becomes a prompt-injection surface that escapes adjacent fences.
         joined = "; ".join(
-            f"{pi.path}: {pi.instructions}" for pi in config.review.path_instructions
+            f"{neutralize_untrusted_fence(pi.path)}: "
+            f"{neutralize_untrusted_fence(pi.instructions)}"
+            for pi in config.review.path_instructions
         )
         instructions = f"\nPath instructions: {joined}"
     return f"Review profile: {profile}. Active lenses: {lenses}.{instructions}"

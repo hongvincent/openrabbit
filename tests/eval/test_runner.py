@@ -609,10 +609,17 @@ def test_cli_eval_online_requires_finder_role(
     assert "finder" in capsys.readouterr().err.lower()
 
 
-def test_cli_eval_require_pass_exits_nonzero_on_budget_fail(git_repo: Path, capsys):
-    # The default offline fixtures flag a clean control -> FP budget fails. With
-    # --require-pass that becomes a non-zero exit (a CI gate).
+def test_cli_eval_require_pass_offline_is_hard_error(git_repo: Path, capsys):
+    # Corrected behavior (eval-honesty contract): an offline run uses scripted
+    # fixtures + an always-'match' judge, so its FP rate is NOT a real
+    # measurement and must NEVER gate CI. ``--require-pass`` without ``--online``
+    # is therefore a HARD ERROR (non-zero exit) — it can never be cited as a
+    # passing gate. Previously this returned 1 on a fixture "budget fail"; that
+    # let a meaningless fixture verdict masquerade as a CI gate, which the
+    # honest-eval fix forbids.
     from openrabbit.cli import main
 
     rc = main(["eval", "--repo", str(git_repo), "--require-pass"])
-    assert rc == 1
+    assert rc != 0
+    err = capsys.readouterr().err.lower()
+    assert "require-pass" in err or "require_pass" in err or "online" in err

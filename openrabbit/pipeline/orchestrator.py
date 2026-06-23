@@ -57,6 +57,60 @@ class ReviewResult:
     cost_summary: CostSummary = field(default_factory=CostSummary)
 
 
+class _RoleOptionsProvider(Provider):
+    """A :class:`Provider` wrapper that injects a role's configured options.
+
+    Per-role ``model_roles.<role>`` options (``reasoning_effort``, ``temperature``,
+    ``top_p``, ...) are config-as-code knobs the user set deliberately, but the
+    spine's call sites (``run_lenses`` / ``verify_findings``) are role-agnostic and
+    pass only per-call concerns (e.g. ``tool_choice``). Baking the role options in
+    here — at construction, in :func:`model_factory` — is what actually threads them
+    to ``complete()`` so they appear in the recorded request body.
+
+    Merge policy: the role's options are DEFAULTS; an explicit per-call opt of the
+    same name wins (the call site knows the per-call need, e.g. a forced tool). The
+    underlying adapters already ignore options they don't recognize, so leaking a
+    non-provider option (e.g. ``enabled``) is harmless.
+    """
+
+    def __init__(self, inner: Provider, options: Mapping[str, Any]) -> None:
+        self._inner = inner
+        # Copy so a later config mutation can't retroactively change calls; drop
+        # keys that are config bookkeeping rather than provider knobs.
+        self._options = {
+            k: v for k, v in dict(options).items() if k not in _NON_PROVIDER_OPTION_KEYS
+        }
+
+    @property
+    def name(self) -> str:
+        return self._inner.name
+
+    @property
+    def model(self) -> str:
+        return self._inner.model
+
+    def complete(
+        self,
+        system: str,
+        messages: list[Message],
+        tools: Optional[list[ToolSpec]],
+        max_tokens: int,
+        cache_prefix: Optional[str],
+        **opts: Any,
+    ) -> CompletionResult:
+        # Role options are defaults; explicit per-call opts override them.
+        merged = {**self._options, **opts}
+        return self._inner.complete(
+            system, messages, tools, max_tokens, cache_prefix, **merged
+        )
+
+
+#: ``model_roles.<role>`` keys that are config bookkeeping, NOT provider knobs, so
+#: they are never threaded into ``complete()``. ``enabled`` gates whether an
+#: (optional) role is active at all; it must not be sent as a completion option.
+_NON_PROVIDER_OPTION_KEYS = frozenset({"enabled"})
+
+
 class _UsageRecordingProvider(Provider):
     """A transparent :class:`Provider` wrapper that sums :class:`Usage`.
 
@@ -115,19 +169,33 @@ def model_factory(role: ModelRole) -> Provider:
         kwargs: dict[str, Any] = {"model": model}
         if role.region is not None:
             kwargs["region"] = role.region
-        return OpenAIResponsesAdapter(**kwargs)
+        return _with_role_options(OpenAIResponsesAdapter(**kwargs), role)
 
     if model.startswith("amazon.") or "anthropic." in model:
         from openrabbit.providers.converse import ConverseAdapter
 
         if role.region is None:
             raise ValueError(f"ConverseAdapter requires a region for model {model!r}")
-        return ConverseAdapter(model_id=model, region=role.region)
+        return _with_role_options(
+            ConverseAdapter(model_id=model, region=role.region), role
+        )
 
     raise ValueError(
         f"cannot route model {model!r} to a provider adapter "
         "(expected an 'openai.', 'amazon.', or 'anthropic.' prefix)"
     )
+
+
+def _with_role_options(inner: Provider, role: ModelRole) -> Provider:
+    """Wrap ``inner`` so the role's configured options reach every ``complete()``.
+
+    Returns ``inner`` unchanged when the role declares no options (so the common
+    case stays a bare adapter), else a :class:`_RoleOptionsProvider` that injects
+    them as defaults.
+    """
+    if not role.options:
+        return inner
+    return _RoleOptionsProvider(inner, role.options)
 
 
 def build_providers(config: Config) -> dict[str, Provider]:

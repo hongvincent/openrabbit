@@ -221,19 +221,43 @@ def test_scaffolded_config_default_gate(python_repo: Path) -> None:
     assert cfg.review.confidence_gate == pytest.approx(0.80)
 
 
-def test_scaffolded_config_enables_python_external_tools(python_repo: Path) -> None:
-    """A python repo's defaults wire ruff/semgrep into external_tools."""
+def test_scaffolded_config_external_tools_reserved_not_advertised(
+    python_repo: Path,
+) -> None:
+    """external_tools is RESERVED / not yet wired (finding #3): the scaffolded
+    config must NOT advertise a dead feature. The pipeline never runs these graders
+    or injects their output, so the active `enabled` list must be EMPTY — not a
+    populated list that falsely implies ruff/semgrep run.
+
+    (Corrected from the old behavior, which scaffolded ``enabled: [ruff, semgrep,
+    ...]`` and thereby advertised a feature the harness does not execute.)
+    """
     plan = scaffold(python_repo, dry_run=True)
     cfg_file = next(f for f in plan.files if f.path == ".openrabbit.yaml")
     cfg = load_config(yaml.safe_load(cfg_file.content))
-    assert "ruff" in cfg.external_tools.enabled
+    # The honest contract: no tool is advertised as active.
+    assert cfg.external_tools.enabled == [], (
+        "scaffold must not advertise external_tools as active while the runtime "
+        f"plumbing is unwired; got {cfg.external_tools.enabled!r}"
+    )
+    # The block is clearly marked reserved so a reader is not misled.
+    assert "reserved" in cfg_file.content.lower()
+    assert "not yet wired" in cfg_file.content.lower()
 
 
-def test_scaffolded_config_node_external_tools(node_repo: Path) -> None:
-    plan = scaffold(node_repo, dry_run=True)
-    cfg_file = next(f for f in plan.files if f.path == ".openrabbit.yaml")
-    cfg = load_config(yaml.safe_load(cfg_file.content))
-    assert "eslint" in cfg.external_tools.enabled
+def test_scaffold_still_detects_external_tools_for_future_wiring(
+    python_repo: Path, node_repo: Path
+) -> None:
+    """Detection is NOT lost: the detected graders are still surfaced on the stack
+    (for the JSON payload + the reserved comment + future wiring) — they are just
+    not written into the active `enabled` list."""
+    py = scaffold(python_repo, dry_run=True)
+    assert "ruff" in py.stack.external_tools
+    # ...and the reserved comment names them so the user can opt in once wired.
+    cfg = next(f for f in py.files if f.path == ".openrabbit.yaml").content
+    assert "ruff" in cfg  # present in the reserved comment, not in `enabled`
+    nd = scaffold(node_repo, dry_run=True)
+    assert "eslint" in nd.stack.external_tools
 
 
 # --------------------------------------------------------------------------- #
