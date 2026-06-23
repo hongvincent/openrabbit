@@ -81,17 +81,21 @@ class TestCorrectedAndNewPrices:
 
     def test_lookup_resolves_corrected_and_new_models(self):
         # Each new/corrected model resolves via exact lookup.
-        assert pricing.lookup_price("openai.gpt-5.5") is (
-            pricing.PRICE_TABLE["openai.gpt-5.5"]
+        assert (
+            pricing.lookup_price("openai.gpt-5.5")
+            is (pricing.PRICE_TABLE["openai.gpt-5.5"])
         )
-        assert pricing.lookup_price("openai.gpt-5.4") is (
-            pricing.PRICE_TABLE["openai.gpt-5.4"]
+        assert (
+            pricing.lookup_price("openai.gpt-5.4")
+            is (pricing.PRICE_TABLE["openai.gpt-5.4"])
         )
-        assert pricing.lookup_price("amazon.nova-2-lite-v1:0") is (
-            pricing.PRICE_TABLE["amazon.nova-2-lite-v1:0"]
+        assert (
+            pricing.lookup_price("amazon.nova-2-lite-v1:0")
+            is (pricing.PRICE_TABLE["amazon.nova-2-lite-v1:0"])
         )
-        assert pricing.lookup_price("amazon.nova-premier-v1:0") is (
-            pricing.PRICE_TABLE["amazon.nova-premier-v1:0"]
+        assert (
+            pricing.lookup_price("amazon.nova-premier-v1:0")
+            is (pricing.PRICE_TABLE["amazon.nova-premier-v1:0"])
         )
 
     def test_nova_2_lite_resolves_via_global_profile_prefix(self):
@@ -152,8 +156,9 @@ class TestDeprecatedNovaPro:
 
     def test_nova_2_lite_is_preferred_finder_price(self):
         # The replacement finder must be priced (it's the default role now).
-        assert pricing.lookup_price("amazon.nova-2-lite-v1:0") is (
-            pricing.PRICE_TABLE["amazon.nova-2-lite-v1:0"]
+        assert (
+            pricing.lookup_price("amazon.nova-2-lite-v1:0")
+            is (pricing.PRICE_TABLE["amazon.nova-2-lite-v1:0"])
         )
 
 

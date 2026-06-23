@@ -259,11 +259,7 @@ def test_ruleset_integration_id_is_documented() -> None:
     raw = ruleset.read_text(encoding="utf-8")
     data = json.loads(raw)
     # The id is still present and pins the check to GitHub Actions.
-    checks = [
-        r
-        for r in data["rules"]
-        if r.get("type") == "required_status_checks"
-    ]
+    checks = [r for r in data["rules"] if r.get("type") == "required_status_checks"]
     ids = [
         c.get("integration_id")
         for rule in checks

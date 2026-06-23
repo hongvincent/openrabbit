@@ -110,7 +110,9 @@ def git_repo(tmp_path: Path) -> Path:
     _git(repo, "init", "-q", "-b", "main")
     _commit(repo, "auth.py", _auth_module(_BODY_BASELINE), "Initial commit")
     _commit(repo, "auth.py", _auth_module(_BODY_BUGGY), "introduce bad query")
-    _commit(repo, "auth.py", _auth_module(_BODY_BASELINE), 'Revert "introduce bad query"')
+    _commit(
+        repo, "auth.py", _auth_module(_BODY_BASELINE), 'Revert "introduce bad query"'
+    )
     _commit(
         repo,
         "auth.py",
@@ -192,7 +194,9 @@ class _ToolAwareProvider(Provider):
             return CompletionResult(
                 text="",
                 tool_calls=[
-                    ToolCall(id="v", name="verify_findings", args={"verdicts": verdicts})
+                    ToolCall(
+                        id="v", name="verify_findings", args={"verdicts": verdicts}
+                    )
                 ],
                 finish_reason=FinishReason.TOOL_USE,
                 usage=usage,

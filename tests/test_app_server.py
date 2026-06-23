@@ -396,8 +396,11 @@ def test_dedup_only_records_authenticated_deliveries():
     dedup = DeliveryDedup()
     # Forged delivery: bad signature → 401, must not poison the dedup set.
     forged = _request(
-        secret, "pull_request", _pr_payload("opened"),
-        sign_with="attacker", delivery="x1",
+        secret,
+        "pull_request",
+        _pr_payload("opened"),
+        sign_with="attacker",
+        delivery="x1",
     )
     resp = handle_request(forged, secret=secret, deps={"review": spy}, dedup=dedup)
     assert resp.status == 401

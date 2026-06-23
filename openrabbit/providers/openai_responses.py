@@ -301,19 +301,14 @@ class OpenAIResponsesAdapter(Provider):
                     last_exc = exc
                     self._sleep_before_retry(attempt, exc)
                     continue
-                raise ProviderError(
-                    f"Responses API request failed: {exc}"
-                ) from exc
+                raise ProviderError(f"Responses API request failed: {exc}") from exc
             except httpx.HTTPError as exc:  # other transport-level errors
-                raise ProviderError(
-                    f"Responses API request failed: {exc}"
-                ) from exc
+                raise ProviderError(f"Responses API request failed: {exc}") from exc
 
         # Defensive: loop only exits via return/raise above, but if every
         # attempt was retryable and we fell through, surface the last error.
         raise ProviderError(  # pragma: no cover - unreachable guard
-            f"Responses API request failed after {_MAX_ATTEMPTS} attempts: "
-            f"{last_exc}"
+            f"Responses API request failed after {_MAX_ATTEMPTS} attempts: {last_exc}"
         )
 
     @classmethod
@@ -325,9 +320,7 @@ class OpenAIResponsesAdapter(Provider):
         clamped to ``_BACKOFF_MAX_SECONDS``. A server ``Retry-After`` (seconds)
         sets a floor so we never poll faster than the server asked.
         """
-        backoff = min(
-            _BACKOFF_MAX_SECONDS, _BACKOFF_BASE_SECONDS * (2**attempt)
-        )
+        backoff = min(_BACKOFF_MAX_SECONDS, _BACKOFF_BASE_SECONDS * (2**attempt))
         # Full jitter in [0, backoff]; random is patched in tests for determinism.
         delay = random.random() * backoff
         retry_after = cls._retry_after_seconds(exc)
