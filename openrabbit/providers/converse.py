@@ -18,8 +18,11 @@ What this adapter handles
   ``tool_choice`` opt is given, ``toolConfig.toolChoice`` — including forced
   structured output via a single ``emit_findings`` tool
   (``toolChoice={"tool": {"name": ...}}``).
-* **Prompt caching** -> ``cachePoint`` blocks inserted (tools -> system ->
-  messages order) when ``cache_prefix`` is supplied (SPEC 6 step 3 / 7.1).
+* **Prompt caching** -> ``cachePoint`` blocks inserted into ``system`` and the
+  final ``messages`` block when ``cache_prefix`` is supplied (SPEC 6 step 3 /
+  7.1). The ``tools`` array is intentionally NOT cached: Amazon Nova rejects a
+  tool-level cache point on the real Converse API, and the tools list is tiny
+  and stable, so the cacheable bytes live entirely in system/messages.
 * **Parsing** -> concatenated text, parsed ``toolUse`` blocks into
   :class:`~openrabbit.domain.ToolCall`, normalized :class:`FinishReason` from
   ``stopReason``, and :class:`Usage` from
@@ -71,6 +74,20 @@ _CACHE_POINT: dict[str, Any] = {"cachePoint": {"type": "default"}}
 #: adds client-side rate limiting on top of exponential backoff.
 _RETRY_MAX_ATTEMPTS = 5
 _RETRY_MODE = "adaptive"
+
+#: Pin SigV4 for the ``bedrock-runtime`` client.
+#:
+#: WHY THIS MATTERS: the GPT-5.5 verifier path requires ``AWS_BEARER_TOKEN_BEDROCK``
+#: in the environment. Recent boto3 will AUTO-PREFER that bearer token for ANY
+#: bearer-capable service — including ``bedrock-runtime`` — UNLESS a signature
+#: version is set "in code" on the client config. In a real review the Nova
+#: finder and the GPT-5.5 verifier run in the SAME process with BOTH credentials
+#: present, so without this pin the Converse (Nova) client would silently pick up
+#: the mantle bearer token and fail with ``AccessDeniedException`` ("Invalid API
+#: Key format"). Setting ``signature_version`` here marks an explicit in-code
+#: auth choice (``handlers._should_prefer_bearer_auth``), so SigV4 (profile/role)
+#: creds are used and the ambient bearer token is correctly ignored on this path.
+_SIGNATURE_VERSION = "v4"
 
 
 class ConverseAdapter(Provider):
@@ -143,7 +160,11 @@ class ConverseAdapter(Provider):
                 retries={
                     "max_attempts": _RETRY_MAX_ATTEMPTS,
                     "mode": _RETRY_MODE,
-                }
+                },
+                # Pin SigV4 so an ambient AWS_BEARER_TOKEN_BEDROCK (the GPT-5.5
+                # verifier's credential) is NOT hijacked for the Nova Converse
+                # client when both paths run in one process. See _SIGNATURE_VERSION.
+                signature_version=_SIGNATURE_VERSION,
             )
             self._client = boto3.client(
                 "bedrock-runtime",
@@ -260,6 +281,16 @@ class ConverseAdapter(Provider):
     ) -> Optional[dict[str, Any]]:
         if not tools:
             return None
+        # NOTE: we deliberately do NOT append a ``cachePoint`` block to the
+        # ``tools`` array. Amazon Nova (the finder this adapter primarily serves)
+        # REJECTS a tool-level cache point on the real Converse API with a
+        # ValidationException ("extraneous key [cachePoint] is not permitted"),
+        # and tool-block caching is not portable across the model families here.
+        # The large, byte-stable rubric/context lives in ``system``/``messages``
+        # (which DO accept cachePoint and carry ~all the cacheable bytes), so the
+        # tiny, stable tools list is left uncached — correctness over a negligible
+        # token saving. ``use_cache`` is intentionally unused for tools.
+        del use_cache
         tool_entries: list[dict[str, Any]] = [
             {
                 "toolSpec": {
@@ -270,8 +301,6 @@ class ConverseAdapter(Provider):
             }
             for t in tools
         ]
-        if use_cache:
-            tool_entries.append(dict(_CACHE_POINT))
         config: dict[str, Any] = {"tools": tool_entries}
         if tool_choice is not None:
             config["toolChoice"] = self._build_tool_choice(tool_choice)
