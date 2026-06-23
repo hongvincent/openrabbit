@@ -204,11 +204,29 @@ def test_scaffolded_config_round_trips(python_repo: Path) -> None:
     parsed = yaml.safe_load(cfg_file.content)
     cfg = load_config(parsed)
     assert isinstance(cfg, Config)
-    # Sensible model_roles defaults per SPEC §7.2: Nova finder + GPT-5.5 verifier.
+    # Sensible model_roles defaults per the LIVE-VERIFIED model switch (SPEC §7.2):
+    # a Nova 2 Lite finder (Seoul) + a GPT-5.4 verifier (us-east-2). These are the
+    # CORRECTED expectations — the registry, pricing, and .openrabbit.example.yaml
+    # all reflect Nova 2 Lite + GPT-5.4 now, so the init scaffold must match them
+    # (the old nova-pro / gpt-5.5 defaults would scaffold an outdated config).
     assert "finder" in cfg.model_roles
     assert "verifier" in cfg.model_roles
-    assert "nova" in cfg.model_roles["finder"].model.lower()
-    assert "gpt-5.5" in cfg.model_roles["verifier"].model.lower()
+    assert cfg.model_roles["triage"].model == "global.amazon.nova-2-lite-v1:0"
+    assert cfg.model_roles["finder"].model == "global.amazon.nova-2-lite-v1:0"
+    assert cfg.model_roles["verifier"].model == "openai.gpt-5.4"
+    assert cfg.model_roles["verifier"].region == "us-east-2"
+    # The new finder must NOT default to the superseded nova-pro id, and the
+    # verifier must NOT default to the superseded gpt-5.5 id.
+    assert "nova-pro" not in cfg.model_roles["finder"].model.lower()
+    assert "gpt-5.5" not in cfg.model_roles["verifier"].model.lower()
+    # The Nova 2 Lite finder has NO reasoning_effort yet (extended-thinking API
+    # shape is TBD), and the verifier keeps reasoning_effort: medium + store: false.
+    assert "reasoning_effort" not in cfg.model_roles["finder"].options
+    assert cfg.model_roles["verifier"].options.get("reasoning_effort") == "medium"
+    assert cfg.model_roles["verifier"].options.get("store") is False
+    # The raw scaffold text carries the Nova 2 extended-thinking TODO marker so a
+    # reader knows the finder reasoning shape is deliberately deferred, not missed.
+    assert "Nova 2" in cfg_file.content and "TODO" in cfg_file.content
     # All five lenses on by default.
     assert "correctness" in cfg.review.lenses
     assert "security" in cfg.review.lenses

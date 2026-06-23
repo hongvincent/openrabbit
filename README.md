@@ -21,10 +21,11 @@ provable**.
 
 ## What it is
 
-- **Bedrock-only, multi-model BYO.** Default routing is an **Amazon Nova** finder
-  (cheap, high-recall broad pass) → an **OpenAI GPT-5.5** verifier (strongest
-  available; cross-family independence; gate ≥ 0.80). Claude-on-Bedrock is an
-  optional, cost-gated premium role.
+- **Bedrock-only, multi-model BYO.** Default routing is an **Amazon Nova 2 Lite**
+  finder (cheap, high-recall broad pass) → an **OpenAI GPT-5.4** verifier (strong,
+  cross-family independence; gate ≥ 0.80). A cost-gated GPT-5.4-high premium role
+  is available but off by default. (Both `openai.gpt-5.4` and `openai.gpt-5.5` are
+  supported verifier ids; the live-verified default is gpt-5.4.)
 - **Advisory-only.** The reasoning layer holds no merge / approve / push / write
   credentials. The PR diff is treated as **untrusted data**, fenced and never
   obeyed as instructions.
@@ -83,28 +84,33 @@ review:
   path_filters: ["!**/dist/**", "!**/*.lock", "!**/generated/**"]
   lenses: [correctness, security, performance, tests, maintainability]
 model_roles:
-  finder:   { model: amazon.nova-pro-v1:0,  region: ap-northeast-2 }
-  verifier: { model: openai.gpt-5.5, region: us-east-2, reasoning_effort: medium, store: false }
+  triage:   { model: global.amazon.nova-2-lite-v1:0, region: ap-northeast-2 }
+  finder:   { model: global.amazon.nova-2-lite-v1:0, region: ap-northeast-2 }
+  verifier: { model: openai.gpt-5.4, region: us-east-2, reasoning_effort: medium, store: false }
 ```
 
 The full reference — every `review` key, `model_roles` + `verify_min_severity`,
 the five lenses, path filters, and `path_instructions` — is in
 [`docs/configuration.md`](docs/configuration.md).
 
-## Bedrock model routing (Nova finder → GPT-5.5 verifier)
+## Bedrock model routing (Nova 2 Lite finder → GPT-5.4 verifier)
 
 | Role | Default model | Region | Why |
 |------|---------------|--------|-----|
-| triage / skip | `amazon.nova-lite-v1:0` | `ap-northeast-2` (Seoul) | near-free yes/no on the diff |
-| **finder** (broad, report-all) | `amazon.nova-pro-v1:0` | `ap-northeast-2` | cost-effective high-recall first pass |
-| **verifier** / judge | `openai.gpt-5.5` | `us-east-2` | strongest available; cross-family; gate ≥ 0.80 |
-| premium (optional, off by default) | Claude on Bedrock | where enabled | highest-stakes PRs |
+| triage / skip | `global.amazon.nova-2-lite-v1:0` | `ap-northeast-2` (Seoul) | near-free yes/no on the diff |
+| **finder** (broad, report-all) | `global.amazon.nova-2-lite-v1:0` | `ap-northeast-2` | cost-effective high-recall first pass |
+| **verifier** / judge | `openai.gpt-5.4` | `us-east-2` | strong, cross-family; gate ≥ 0.80 |
+| premium (optional, off by default) | `openai.gpt-5.4` (high) | `us-east-2` | highest-stakes PRs |
 
-GPT-5.5 runs over Bedrock's OpenAI-compatible *mantle* Responses endpoint, which
-only exists in `us-east-1` / `us-east-2` — a GPT-5.5 role outside those regions
-is a hard config error. Nova / Claude run over `bedrock-runtime` Converse with a
-broader, soft region allow-list. If eval shows Nova's finder recall is too low,
-promote the finder to GPT-5.5 or Claude with a one-line config change.
+Nova 2 Lite runs via the `global.` cross-region inference profile (Seoul is
+live-verified on Converse); the finder ships with **no** `reasoning_effort` yet —
+Nova 2's extended-thinking request shape is TBD, so enabling low-effort reasoning
+is a tracked follow-up. GPT-5.4 runs over Bedrock's OpenAI-compatible *mantle*
+Responses endpoint, which only exists in `us-east-1` / `us-east-2` — a GPT-5.4
+(or GPT-5.5) role outside those regions is a hard config error. Both
+`openai.gpt-5.4` and `openai.gpt-5.5` are supported verifier ids; the
+live-verified default is **gpt-5.4**. If eval shows the finder's recall is too
+low, promote the finder to GPT-5.4 or Claude with a one-line config change.
 
 ## Security model
 
