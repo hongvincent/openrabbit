@@ -219,14 +219,25 @@ def test_scaffolded_config_round_trips(python_repo: Path) -> None:
     # verifier must NOT default to the superseded gpt-5.5 id.
     assert "nova-pro" not in cfg.model_roles["finder"].model.lower()
     assert "gpt-5.5" not in cfg.model_roles["verifier"].model.lower()
-    # The Nova 2 Lite finder has NO reasoning_effort yet (extended-thinking API
-    # shape is TBD), and the verifier keeps reasoning_effort: medium + store: false.
+    # The Nova 2 Lite finder keeps reasoning OFF by default (the SAFE default — no
+    # active reasoning_effort key), and the verifier keeps reasoning_effort: medium
+    # + store: false.
     assert "reasoning_effort" not in cfg.model_roles["finder"].options
     assert cfg.model_roles["verifier"].options.get("reasoning_effort") == "medium"
     assert cfg.model_roles["verifier"].options.get("store") is False
-    # The raw scaffold text carries the Nova 2 extended-thinking TODO marker so a
-    # reader knows the finder reasoning shape is deliberately deferred, not missed.
-    assert "Nova 2" in cfg_file.content and "TODO" in cfg_file.content
+    # CORRECTED expectation: the Nova 2 extended-thinking request shape is CONFIRMED
+    # now (live-verified), so the scaffold must NOT carry a stale 'shape TBD' TODO.
+    # Instead the finder block ships a COMMENTED reference line showing the
+    # confirmed `reasoning_effort: low` opt-in so a reader can enable it knowingly.
+    assert "TODO" not in cfg_file.content, (
+        "the Nova 2 shape is confirmed — the scaffold must not carry a TODO"
+    )
+    assert "Nova 2" in cfg_file.content
+    # The commented opt-in reference: a `# reasoning_effort: low` line in the
+    # finder block (kept commented so the default stays OFF/safe).
+    assert "# reasoning_effort: low" in cfg_file.content, (
+        "finder block must show the confirmed `# reasoning_effort: low` opt-in"
+    )
     # All five lenses on by default.
     assert "correctness" in cfg.review.lenses
     assert "security" in cfg.review.lenses

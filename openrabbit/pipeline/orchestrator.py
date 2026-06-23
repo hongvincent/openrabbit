@@ -370,6 +370,7 @@ def review(
                 prefix=prefix,
                 enclosing_fetcher=enclosing_fetcher,
                 cache_prefix=cache_key,
+                lens_reasoning_effort=config.review.lens_reasoning_effort,
             )
         )
 

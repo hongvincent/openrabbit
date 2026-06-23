@@ -16,9 +16,11 @@ from __future__ import annotations
 from openrabbit.bedrock_models import (
     ADAPTER_CONVERSE,
     ADAPTER_RESPONSES,
+    DEPRECATED_MODELS,
     ModelInfo,
     Severity,
     adapter_for_model,
+    is_deprecated_model,
     lookup_model,
     normalize_model_id,
     validate_model_region,
@@ -124,6 +126,49 @@ def test_global_prefix_is_recognized_profile_prefix():
     from openrabbit.bedrock_models import PROFILE_PREFIXES
 
     assert "global." in PROFILE_PREFIXES
+
+
+# --------------------------------------------------------------------------- #
+# deprecated legacy models — nova-pro Gen-1 (backward-compat, not removed)      #
+# --------------------------------------------------------------------------- #
+def test_nova_pro_still_resolves_for_backward_compat():
+    # nova-pro is DEPRECATED but MUST keep resolving so existing configs that
+    # still reference it don't fail to load (we annotate, we don't remove).
+    info = lookup_model("amazon.nova-pro-v1:0")
+    assert isinstance(info, ModelInfo)
+    assert info.adapter == ADAPTER_CONVERSE
+
+
+def test_nova_pro_is_in_deprecated_models():
+    # The legacy Gen-1 finder is flagged deprecated (5K output cap, no
+    # reasoning path, no global profile, EOL signal).
+    assert "amazon.nova-pro-v1:0" in DEPRECATED_MODELS
+    assert is_deprecated_model("amazon.nova-pro-v1:0") is True
+
+
+def test_nova_2_lite_is_not_deprecated():
+    # nova-2-lite is the *preferred* replacement finder; it must NOT be flagged.
+    assert "amazon.nova-2-lite-v1:0" not in DEPRECATED_MODELS
+    assert is_deprecated_model("amazon.nova-2-lite-v1:0") is False
+
+
+def test_nova_2_lite_is_preferred_registered_finder():
+    # The decided default finder/triage is registered and Converse-driven.
+    info = lookup_model("amazon.nova-2-lite-v1:0")
+    assert isinstance(info, ModelInfo)
+    assert info.adapter == ADAPTER_CONVERSE
+    assert info.region_strict is False
+
+
+def test_is_deprecated_model_resolves_inference_profile():
+    # A cross-region profile id wrapping a deprecated base is also deprecated.
+    assert is_deprecated_model("global.amazon.nova-pro-v1:0") is True
+    # ...and a profile over the preferred finder is not.
+    assert is_deprecated_model("global.amazon.nova-2-lite-v1:0") is False
+
+
+def test_is_deprecated_model_unknown_is_false():
+    assert is_deprecated_model("amazon.titan-imaginary-v9:0") is False
 
 
 # --------------------------------------------------------------------------- #
