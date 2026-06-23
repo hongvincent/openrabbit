@@ -65,6 +65,13 @@ _INFERENCE_OPT_KEYS: dict[str, str] = {
 
 _CACHE_POINT: dict[str, Any] = {"cachePoint": {"type": "default"}}
 
+#: Bedrock throttles (``ThrottlingException``) under load. boto3's default retry
+#: policy is too weak for the finder/verifier batch workload, so build the
+#: client with an ADAPTIVE retry mode and a bounded attempt count. ``adaptive``
+#: adds client-side rate limiting on top of exponential backoff.
+_RETRY_MAX_ATTEMPTS = 5
+_RETRY_MODE = "adaptive"
+
 
 class ConverseAdapter(Provider):
     """Provider backed by Bedrock ``bedrock-runtime`` :meth:`converse`.
@@ -130,8 +137,19 @@ class ConverseAdapter(Provider):
     def _get_client(self) -> Any:
         if self._client is None:
             import boto3  # lazy: keeps module import AWS-free
+            from botocore.config import Config  # lazy: AWS-free module import
 
-            self._client = boto3.client("bedrock-runtime", region_name=self._region)
+            config = Config(
+                retries={
+                    "max_attempts": _RETRY_MAX_ATTEMPTS,
+                    "mode": _RETRY_MODE,
+                }
+            )
+            self._client = boto3.client(
+                "bedrock-runtime",
+                region_name=self._region,
+                config=config,
+            )
         return self._client
 
     # ------------------------------------------------------------------ #

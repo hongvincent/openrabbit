@@ -42,6 +42,13 @@ DEFAULT_FINDER_MAX_TOKENS = 4096
 
 # JSON Schema for the forced emit_findings tool input (matches the finding
 # wire contract minus the harness-computed fingerprint).
+#
+# OpenAI strict structured-outputs (``strict: true`` on the forced tool — set
+# unconditionally by ``OpenAIResponsesAdapter``) REQUIRES, recursively, that
+# every object set ``additionalProperties: false`` AND list ALL of its declared
+# properties in ``required``. An optional field cannot be omitted from
+# ``required``; instead it stays required and is made nullable via a union type
+# (e.g. ``["string", "null"]``). ``suggestion`` is the one optional field here.
 _FINDING_PROPS: dict[str, Any] = {
     "file": {"type": "string"},
     "startLine": {"type": "integer"},
@@ -52,16 +59,25 @@ _FINDING_PROPS: dict[str, Any] = {
     "confidence": {"type": "number"},
     "title": {"type": "string"},
     "body": {"type": "string"},
+    # Optional -> nullable + still listed in `required` (strict-mode rule).
     "suggestion": {"type": ["string", "null"]},
     "ruleId": {"type": "string"},
 }
 
+_FINDING_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": _FINDING_PROPS,
+    "required": list(_FINDING_PROPS),
+}
+
 _EMIT_FINDINGS_SCHEMA: dict[str, Any] = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "findings": {
             "type": "array",
-            "items": {"type": "object", "properties": _FINDING_PROPS},
+            "items": _FINDING_ITEM_SCHEMA,
         }
     },
     "required": ["findings"],
