@@ -18,6 +18,8 @@ review:
   profile: balanced              # chill | balanced | assertive
   confidence_gate: 0.80          # 0.0–1.0; drop findings below this calibrated confidence
   verify_min_severity: high      # critical | high | medium | low | nit
+  always_verify_categories: [correctness, security]  # trust-core lenses: verify REGARDLESS of severity
+  unverified_confidence_gate: 0.9  # higher bar a finding must clear to post UN-verified (>= confidence_gate)
   incremental: true              # review diff since last_reviewed_sha when available
   path_filters:                  # glob filters; "!" excludes a path from review
     - "!**/dist/**"
@@ -68,6 +70,8 @@ telemetry:
 | `profile` | enum | `balanced` | review temperament: `chill`, `balanced`, or `assertive`. |
 | `confidence_gate` | float `[0,1]` | `0.80` | findings with calibrated confidence below this are dropped. |
 | `verify_min_severity` | severity | `high` | minimum severity routed through the (expensive, cross-family) **verifier**; less-severe findings take the cheaper finder-confidence path. One of `critical`, `high`, `medium`, `low`, `nit`. |
+| `always_verify_categories` | category list | `[correctness, security]` | **trust-core** lenses whose findings route through the verifier **regardless of severity** (a hallucinated medium/correctness finding is re-checked, not posted blind). Set `[]` to disable; only severity then governs routing. |
+| `unverified_confidence_gate` | float `[0,1]` | `0.9` | higher finder-confidence bar a finding must clear to post **un-verified** (it bypassed the verifier: below `verify_min_severity` **and** not trust-core). Must be **>= `confidence_gate`**. Drops low-severity nitpicks the verifier never vetted. |
 | `incremental` | bool | `true` | when a `last_reviewed_sha` is known, review only the diff since then. |
 | `path_filters` | string list | `[]` | glob filters; a leading `!` excludes a path from review (e.g. lockfiles, generated/dist code). |
 | `path_instructions` | list | `[]` | per-path reviewer focus; each entry is `{ path, instructions }`. |
@@ -81,6 +85,27 @@ cross-family verifier; everything below takes the cheaper finder-confidence +
 gate path. Widen it (e.g. to `medium`) to verify more findings at higher cost, or
 keep it tight to control spend. This is one of the biggest cost levers alongside
 prefix prompt caching and tiering.
+
+### `always_verify_categories` + `unverified_confidence_gate` (the trust knobs)
+
+`verify_min_severity` alone is not enough for the **verify-strict** thesis (trust
+> coverage). A finding *below* that severity used to post **un-verified** straight
+through the gate — so a hallucinated `medium`/`correctness` finding (the verifier
+never saw it) and `low`/`maintainability` nitpicks at ~0.8 leaked out as false
+positives. Two knobs close that leak:
+
+* **`always_verify_categories`** (default `[correctness, security]`) — these
+  **trust-core** lenses route through the verifier *regardless of severity*. A
+  finding is verified when it is at least as severe as `verify_min_severity`
+  **OR** its category is trust-core, so a hallucinated medium/correctness finding
+  is actually re-checked (and refuted) instead of posting blind. This only adds
+  verifier calls for trust-core mediums that already survived the finder gate —
+  the finder pre-filters, so the cost stays bounded.
+* **`unverified_confidence_gate`** (default `0.9`, must be **>= `confidence_gate`**)
+  — findings that *still* bypass the verifier (below severity **and** not
+  trust-core) must clear this **higher** bar to post un-verified. So a
+  `low`/`maintainability` nitpick at `0.8` is dropped rather than posted, while a
+  genuinely high-confidence unverified finding (>= the bar) still surfaces.
 
 ### Lenses
 
