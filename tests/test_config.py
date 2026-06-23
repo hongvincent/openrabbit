@@ -249,16 +249,12 @@ def test_lens_reasoning_effort_parsed():
 
 def test_lens_reasoning_effort_unknown_lens_rejected():
     with pytest.raises(ConfigError):
-        load_config(
-            {"review": {"lens_reasoning_effort": {"bogus": "low"}}}
-        )
+        load_config({"review": {"lens_reasoning_effort": {"bogus": "low"}}})
 
 
 def test_lens_reasoning_effort_invalid_value_rejected():
     with pytest.raises(ConfigError):
-        load_config(
-            {"review": {"lens_reasoning_effort": {"correctness": "extreme"}}}
-        )
+        load_config({"review": {"lens_reasoning_effort": {"correctness": "extreme"}}})
 
 
 def test_lens_reasoning_effort_must_be_mapping():

@@ -74,7 +74,9 @@ def _base_ref_candidates(base_ref: str) -> list[str]:
     ]
 
 
-def _load_base_config(base_ref: str, repo_root: Optional[Path] = None) -> Optional[Config]:
+def _load_base_config(
+    base_ref: str, repo_root: Optional[Path] = None
+) -> Optional[Config]:
     """Load ``.openrabbit.yaml`` from the trusted BASE git ref (best-effort).
 
     In CI the working tree is the PR HEAD (attacker-controlled for a fork /
@@ -103,7 +105,10 @@ def _load_base_config(base_ref: str, repo_root: Optional[Path] = None) -> Option
                     timeout=5,
                     check=False,
                 )
-            except (OSError, subprocess.SubprocessError):  # pragma: no cover - defensive
+            except (
+                OSError,
+                subprocess.SubprocessError,
+            ):  # pragma: no cover - defensive
                 return None
             if proc.returncode != 0 or not proc.stdout.strip():
                 continue
@@ -761,11 +766,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         # empty/near-empty corpus; fail closed and say why.
         overall = report.scorecard.overall
         fp_denominator = overall.fp + overall.tn
-        if (
-            fp_denominator == 0
-            or report.control_count == 0
-            or report.call_count == 0
-        ):
+        if fp_denominator == 0 or report.control_count == 0 or report.call_count == 0:
             print(
                 "error: --require-pass cannot pass on a degenerate/near-empty "
                 f"corpus (controls={report.control_count}, "

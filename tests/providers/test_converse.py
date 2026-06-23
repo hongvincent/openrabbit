@@ -351,9 +351,7 @@ def test_reasoning_effort_disabled_values_omit_reasoning_config(
     from openrabbit.providers.converse import ConverseAdapter
 
     a = ConverseAdapter(model_id="m", region="r")
-    a.complete(
-        "s", [Message("user", "x")], None, 100, None, reasoning_effort=disabled
-    )
+    a.complete("s", [Message("user", "x")], None, 100, None, reasoning_effort=disabled)
     assert "additionalModelRequestFields" not in client.calls[0]
 
 

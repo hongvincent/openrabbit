@@ -326,9 +326,7 @@ class ConverseAdapter(Provider):
         cfg: dict[str, Any] = {"maxTokens": max_tokens}
         # When reasoning effort is "high", Nova 2 rejects sampling params
         # (temperature/topP/topK) with a ValidationException, so drop them.
-        banned = (
-            _HIGH_EFFORT_BANNED_INFERENCE_KEYS if effort == "high" else frozenset()
-        )
+        banned = _HIGH_EFFORT_BANNED_INFERENCE_KEYS if effort == "high" else frozenset()
         for key, value in opts.items():
             mapped = _INFERENCE_OPT_KEYS.get(key)
             if mapped is not None and mapped not in banned:

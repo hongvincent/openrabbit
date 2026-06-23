@@ -207,9 +207,7 @@ def build_golden_set(
                 bug_category=label.bug_category,
                 source=label.source,
                 message=message.strip().splitlines()[0] if message.strip() else "",
-                defect_location=(
-                    _defect_location(diff) if label.known_bug else ""
-                ),
+                defect_location=(_defect_location(diff) if label.known_bug else ""),
             )
         )
         if max_samples is not None and len(samples) >= max_samples:

@@ -455,7 +455,9 @@ class TestRunLenses:
         # A lens with no entry in lens_reasoning_effort (the OFF case for
         # style/maintainability/tests) must NOT pass a reasoning_effort opt, so
         # the Converse adapter leaves reasoning DISABLED (the model default).
-        plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness", "maintainability"])
+        plan = route_mod.route_diff(
+            SAMPLE_DIFF, lenses=["correctness", "maintainability"]
+        )
         pf = next(f for f in plan.files if f.path == "src/api/auth.py")
         finder = FakeProvider([_emit_findings_result([]), _emit_findings_result([])])
         run_lenses_mod.run_lenses(
@@ -694,7 +696,9 @@ class TestVerifyBatchingAndScoping:
         # A non-trust-core MEDIUM finding below the gate is dropped WITHOUT a
         # verifier call. (maintainability, not security: a trust-core medium would
         # now route to the verifier — that is the verify-strict fix.)
-        findings = [_finding(0.50, severity="medium", category="maintainability", rule="r-med")]
+        findings = [
+            _finding(0.50, severity="medium", category="maintainability", rule="r-med")
+        ]
         verifier = FakeProvider([])  # must never be called
         kept = verify_mod.verify_findings(
             verifier, findings, gate=0.80, min_severity="high"
@@ -858,7 +862,9 @@ class TestVerifyTrustCoreRoutingAndUnverifiedGate:
             findings,
             gate=0.80,
             min_severity="high",
-            always_verify_categories=frozenset({"correctness", "security", "performance"}),
+            always_verify_categories=frozenset(
+                {"correctness", "security", "performance"}
+            ),
         )
         assert len(verifier.calls) == 1
         assert kept == []
@@ -1625,9 +1631,7 @@ class TestRoleOptionsThreaded:
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         bedrock = _CaptureBedrockClient()
-        monkeypatch.setitem(
-            __import__("sys").modules, "boto3", _CaptureBoto3(bedrock)
-        )
+        monkeypatch.setitem(__import__("sys").modules, "boto3", _CaptureBoto3(bedrock))
         responses = _CaptureResponsesRecorder()
         responses.install(monkeypatch)
 
@@ -1664,9 +1668,7 @@ class TestRoleOptionsThreaded:
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         bedrock = _CaptureBedrockClient()
-        monkeypatch.setitem(
-            __import__("sys").modules, "boto3", _CaptureBoto3(bedrock)
-        )
+        monkeypatch.setitem(__import__("sys").modules, "boto3", _CaptureBoto3(bedrock))
         responses = _CaptureResponsesRecorder()
         responses.install(monkeypatch)
 
@@ -1685,8 +1687,7 @@ class TestRoleOptionsThreaded:
         assert responses.bodies, "verifier was never called"
         budgets = [b.get("max_output_tokens") for b in responses.bodies]
         assert any(
-            isinstance(x, int) and x >= MIN_REASONING_VERIFY_MAX_TOKENS
-            for x in budgets
+            isinstance(x, int) and x >= MIN_REASONING_VERIFY_MAX_TOKENS for x in budgets
         ), (
             "verifier reasoning_effort:high did not raise the verify budget to the "
             f"reasoning floor ({MIN_REASONING_VERIFY_MAX_TOKENS}); recorded "
@@ -1736,9 +1737,7 @@ class TestRoleOptionsThreaded:
     def test_finder_temperature_reaches_converse_inference_config(self, monkeypatch):
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
         bedrock = _CaptureBedrockClient()
-        monkeypatch.setitem(
-            __import__("sys").modules, "boto3", _CaptureBoto3(bedrock)
-        )
+        monkeypatch.setitem(__import__("sys").modules, "boto3", _CaptureBoto3(bedrock))
         _CaptureResponsesRecorder().install(monkeypatch)
 
         config = self._config()
@@ -1770,9 +1769,7 @@ class TestRoleOptionsThreaded:
         # additionalModelRequestFields.reasoningConfig.maxReasoningEffort.
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
         bedrock = _CaptureBedrockClient()
-        monkeypatch.setitem(
-            __import__("sys").modules, "boto3", _CaptureBoto3(bedrock)
-        )
+        monkeypatch.setitem(__import__("sys").modules, "boto3", _CaptureBoto3(bedrock))
         _CaptureResponsesRecorder().install(monkeypatch)
 
         config = load_config(
@@ -2752,24 +2749,18 @@ class TestVerifySchemaStrictness:
         # Under OpenAI strict mode every property (incl. the now-nullable
         # `rationale`) is required, so a well-formed verdict carries it.
         good = {
-            "verdicts": [
-                {"id": 0, "keep": True, "confidence": 0.9, "rationale": "ok"}
-            ]
+            "verdicts": [{"id": 0, "keep": True, "confidence": 0.9, "rationale": "ok"}]
         }
         assert list(validator.iter_errors(good)) == []
 
         # `rationale` is nullable: an explicit null still validates.
         good_null = {
-            "verdicts": [
-                {"id": 0, "keep": True, "confidence": 0.9, "rationale": None}
-            ]
+            "verdicts": [{"id": 0, "keep": True, "confidence": 0.9, "rationale": None}]
         }
         assert list(validator.iter_errors(good_null)) == []
 
         extra_top = {
-            "verdicts": [
-                {"id": 0, "keep": True, "confidence": 0.9, "rationale": "ok"}
-            ],
+            "verdicts": [{"id": 0, "keep": True, "confidence": 0.9, "rationale": "ok"}],
             "surprise": 1,
         }
         assert list(validator.iter_errors(extra_top))

@@ -439,11 +439,13 @@ class TestEvalOnlineRealCleanControls:
         # Avoid building real Bedrock providers.
         monkeypatch.setattr(
             "openrabbit.pipeline.orchestrator.model_factory",
-            lambda role: (lambda: FakeProvider([], name="fake")),
+            lambda role: lambda: FakeProvider([], name="fake"),
         )
         cfg_path = _online_config(tmp_path)
 
-        rc = cli.main(["eval", "--repo", str(tmp_path), "--online", "--config", str(cfg_path)])
+        rc = cli.main(
+            ["eval", "--repo", str(tmp_path), "--online", "--config", str(cfg_path)]
+        )
         assert rc == 0
         assert recorder.calls, "run_eval was never called"
         call = recorder.calls[-1]
@@ -470,7 +472,9 @@ class TestEvalOnlineRealCleanControls:
         )
         cfg_path = _online_config(tmp_path)
 
-        rc = cli.main(["eval", "--repo", str(tmp_path), "--online", "--config", str(cfg_path)])
+        rc = cli.main(
+            ["eval", "--repo", str(tmp_path), "--online", "--config", str(cfg_path)]
+        )
         assert rc == 0
         call = recorder.calls[-1]
         # judge_provider is supplied (not left to default to the finder).
@@ -514,7 +518,7 @@ class TestEvalDegenerateCorpusGuard:
         monkeypatch.setattr("openrabbit.eval.runner.run_eval", degenerate_run_eval)
         monkeypatch.setattr(
             "openrabbit.pipeline.orchestrator.model_factory",
-            lambda role: (lambda: FakeProvider([], name="fake")),
+            lambda role: lambda: FakeProvider([], name="fake"),
         )
         cfg_path = _online_config(tmp_path)
 
@@ -545,7 +549,7 @@ class TestEvalCorpusFlag:
         monkeypatch.setattr("openrabbit.eval.runner.run_eval", recorder)
         monkeypatch.setattr(
             "openrabbit.pipeline.orchestrator.model_factory",
-            lambda role: (lambda: FakeProvider([], name="fake")),
+            lambda role: lambda: FakeProvider([], name="fake"),
         )
         cfg_path = _online_config(tmp_path)
         corpus = tmp_path / "golden.jsonl"

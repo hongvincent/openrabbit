@@ -34,6 +34,11 @@ permissions: read-all
 jobs:
   analysis:
     name: Scorecard analysis
+    # Scorecard's analysis (GraphQL ListCommits) is "not accessible by integration"
+    # on PRIVATE repos — it only works on public repos. openrabbit is private by
+    # design (spec §1.1), so skip the job entirely (the run goes green/neutral)
+    # until/unless the repo is made public. Re-enables automatically when public.
+    if: ${{ github.event.repository.visibility == 'public' }}
     runs-on: ubuntu-latest
     permissions:
       # Needed to upload the results to the code-scanning (Security) tab.
