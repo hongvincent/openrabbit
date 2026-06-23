@@ -27,6 +27,9 @@ review:
     - path: "src/api/**"
       instructions: "focus on authn/authz and input validation"
   lenses: [correctness, security, performance, tests, maintainability]
+  lens_reasoning_effort:         # per-lens finder reasoning (Nova 2 extended-thinking)
+    correctness: low             # {lens: low|medium|high}; omitted lens => reasoning OFF
+    security: low                # threaded into the finder Converse reasoningConfig
 
 model_roles:                     # role -> { model, region, ...provider opts }
   triage:
@@ -69,6 +72,7 @@ telemetry:
 | `path_filters` | string list | `[]` | glob filters; a leading `!` excludes a path from review (e.g. lockfiles, generated/dist code). |
 | `path_instructions` | list | `[]` | per-path reviewer focus; each entry is `{ path, instructions }`. |
 | `lenses` | string list | all five | which review lenses run (see below). |
+| `lens_reasoning_effort` | map | `{}` | per-lens finder reasoning effort (`{lens: low\|medium\|high}`); an omitted lens runs with reasoning OFF. The **only** wired finder-reasoning knob (see below). |
 
 ### `verify_min_severity` (the cost lever)
 
@@ -106,31 +110,55 @@ and `region` are first-class; any other keys (`reasoning_effort`, `store`,
 | `verifier` | cross-family judge; scores + drops below the gate | `openai.gpt-5.4` @ `us-east-2` |
 | `premium` | optional, cost-gated highest-stakes role | `openai.gpt-5.4` (high) @ `us-east-2` (off by default) |
 
-The `finder` ships with **no** `reasoning_effort` by default (the cheap/safe
-default). Nova 2 Lite's extended-thinking request shape
-(`additionalModelRequestFields` → `reasoningConfig`) is now **CONFIRMED** and
-live-verified, so enabling low-effort reasoning on the finder is a supported,
-documented opt-in rather than a deferred follow-up — see
-[`docs/tuning-guide.md`](tuning-guide.md) for the request shape, the per-lens plan,
-and the cost notes. Crucially, the finder reasoning path uses the **same
-`global.amazon.nova-2-lite-v1:0` profile** the finder already runs on (Seoul) —
-that global profile is **live-verified** to accept `reasoningConfig` and return
-`reasoningContent`, so no `us.*` cross-region profile switch is needed. Both
+The `finder` ships with **no** reasoning by default (the cheap/safe default).
+Nova 2 Lite's extended-thinking request shape (`additionalModelRequestFields` →
+`reasoningConfig`) is now **CONFIRMED** and live-verified, so enabling low-effort
+reasoning on the finder is a supported, documented opt-in rather than a deferred
+follow-up — see [`docs/tuning-guide.md`](tuning-guide.md) for the request shape,
+the per-lens plan, and the cost notes. Crucially, the finder reasoning path uses
+the **same `global.amazon.nova-2-lite-v1:0` profile** the finder already runs on
+(Seoul) — that global profile is **live-verified** to accept `reasoningConfig` and
+return `reasoningContent`, so no `us.*` cross-region profile switch is needed. Both
 `openai.gpt-5.4` and `openai.gpt-5.5` are supported verifier ids — the
 live-verified default is **gpt-5.4**.
 
+### Finder reasoning is configured per lens: `review.lens_reasoning_effort`
+
+The finder's reasoning effort is wired through **exactly one** mechanism:
+**`review.lens_reasoning_effort`** — a `{lens: low|medium|high}` map under
+`review:`. There is **no** per-role `model_roles.finder.reasoning_effort` knob; the
+pipeline reads the per-lens map and threads the matching effort into the finder's
+Converse call as `additionalModelRequestFields.reasoningConfig`
+(`{type: enabled, maxReasoningEffort: <effort>}`). A lens **omitted** from the map
+runs with reasoning **OFF** (Nova 2 default `type: "disabled"`), i.e. a plain
+non-thinking pass — so you pay for reasoning only on the lenses that benefit:
+
+```yaml
+review:
+  lens_reasoning_effort:
+    correctness: low    # logic / correctness — LOW-effort reasoning
+    security: low       # security — LOW-effort reasoning
+    # performance / tests / maintainability OMITTED => reasoning OFF (cheaper pass)
+```
+
+(The `verifier` / `premium` roles keep a first-class per-role `reasoning_effort`
+provider option in `model_roles`, since they are single-call roles, not lens
+fan-outs.)
+
 ### Per-role `reasoning_effort` guidance
 
-`reasoning_effort` is tunable per role (and per lens for the finder). Reasoning is
-billed as **output tokens**, so the defaults keep it OFF on the cheap roles and ON
-where it pays for itself. Full table + the confirmed Nova 2 request shape live in
+Reasoning is billed as **output tokens**, so the defaults keep it OFF on the cheap
+roles and ON where it pays for itself. The `finder` row below is driven by
+`review.lens_reasoning_effort` (per lens), not a `model_roles.finder` key; the
+`verifier` / `premium` rows are the per-role `model_roles.<role>.reasoning_effort`
+option. Full table + the confirmed Nova 2 request shape live in
 [`docs/tuning-guide.md`](tuning-guide.md); the summary:
 
 | Role | Default | Escalation |
 |------|---------|------------|
 | `triage` | **OFF** (temp 0) | — |
-| `finder` | **OFF** for pattern / style lenses | **`low`** for logic / security / correctness / concurrency lenses (Nova 2 `reasoningConfig` `maxReasoningEffort: low`) |
-| `verifier` | **medium** | **high** for security / deep findings |
+| `finder` (via `review.lens_reasoning_effort`) | **OFF** for pattern / style lenses | **`low`** for logic / security / correctness / concurrency lenses (Nova 2 `reasoningConfig` `maxReasoningEffort: low`) |
+| `verifier` (`model_roles.verifier.reasoning_effort`) | **medium** | **high** for security / deep findings |
 | `premium` (off by default) | **high** | **`xhigh`** for the hardest PRs (untested on the mantle endpoint) |
 
 > **Nova Pro (`nova-pro-v1:0`) is deprecated** for new roles — prefer

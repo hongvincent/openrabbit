@@ -14,10 +14,11 @@ Design contract (so the default offline suite stays green AND free):
 The verified recipe these fixtures encode (do not change without re-validating
 against real Bedrock):
 
-* AWS profile ``openrabbit`` authorizes BOTH paths (Nova converse + GPT-5.5).
-* Nova finder/triage: region ``ap-northeast-2``, model id MUST be the inference
-  profile ``apac.amazon.nova-pro-v1:0`` (the bare id fails ValidationException).
-* GPT-5.5 verifier/judge: region ``us-east-2``, model ``openai.gpt-5.5``, auth
+* AWS profile ``openrabbit`` authorizes BOTH paths (Nova converse + GPT-5.4).
+* Nova finder/triage: region ``ap-northeast-2``, model id is the ``global.``
+  inference profile ``global.amazon.nova-2-lite-v1:0`` — the SHIPPED finder
+  (LIVE-VERIFIED on Converse in Seoul; the bare id fails ValidationException).
+* GPT-5.4 verifier/judge: region ``us-east-2``, model ``openai.gpt-5.4``, auth
   via a short-lived bearer token minted with ``aws-bedrock-token-generator`` and
   read by the adapter from ``AWS_BEARER_TOKEN_BEDROCK``.
 """
@@ -34,9 +35,11 @@ AWS_PROFILE = "openrabbit"
 
 #: Region/model wiring shared across the live tests (the verified recipe).
 NOVA_REGION = "ap-northeast-2"
-NOVA_MODEL = "apac.amazon.nova-pro-v1:0"  # inference profile — bare id is rejected
+# SHIPPED finder/triage: Nova 2 Lite via the "global." inference profile (the
+# bare id is rejected with ValidationException). LIVE-VERIFIED on Converse.
+NOVA_MODEL = "global.amazon.nova-2-lite-v1:0"
 GPT_REGION = "us-east-2"
-GPT_MODEL = "openai.gpt-5.5"
+GPT_MODEL = "openai.gpt-5.4"  # SHIPPED verifier/judge — LIVE-VERIFIED on Responses
 
 
 @pytest.fixture(scope="session")
@@ -107,7 +110,7 @@ def bearer_token() -> Iterator[str]:
         from aws_bedrock_token_generator import provide_token
     except Exception as exc:
         pytest.skip(
-            "aws-bedrock-token-generator not installed (skipping GPT-5.5 live "
+            "aws-bedrock-token-generator not installed (skipping GPT-5.4 live "
             f"tests): {exc}"
         )
 
@@ -115,7 +118,7 @@ def bearer_token() -> Iterator[str]:
         token = provide_token(region=GPT_REGION)
     except Exception as exc:  # broad: any minting failure means "no live creds"
         pytest.skip(
-            f"could not mint Bedrock bearer token (skipping GPT-5.5 live tests): "
+            f"could not mint Bedrock bearer token (skipping GPT-5.4 live tests): "
             f"{type(exc).__name__}"
         )
 

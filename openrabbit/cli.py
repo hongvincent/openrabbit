@@ -55,39 +55,65 @@ def _load_config_or_default(config_path: Optional[str]) -> Config:
 # --------------------------------------------------------------------------- #
 # config-as-policy trust boundary (untrusted PR head)                          #
 # --------------------------------------------------------------------------- #
+def _base_ref_candidates(base_ref: str) -> list[str]:
+    """Resolution-order candidate refs for the trusted base config.
+
+    A CI checkout is usually detached HEAD with NO local ``<base>`` branch, so a
+    BARE branch name (``git show main:...``) fails and the run would silently
+    fall back to the untrusted PR-head config. The remote-tracking refs
+    (``origin/<base>`` / ``refs/remotes/origin/<base>``) almost always resolve on
+    a fetched CI checkout, so they are tried before giving up. An already
+    qualified ref (``origin/...`` / ``refs/...``) is used as-is (no double-prefix).
+    """
+    if base_ref.startswith("refs/") or base_ref.startswith("origin/"):
+        return [base_ref]
+    return [
+        base_ref,
+        f"origin/{base_ref}",
+        f"refs/remotes/origin/{base_ref}",
+    ]
+
+
 def _load_base_config(base_ref: str, repo_root: Optional[Path] = None) -> Optional[Config]:
     """Load ``.openrabbit.yaml`` from the trusted BASE git ref (best-effort).
 
     In CI the working tree is the PR HEAD (attacker-controlled for a fork /
     external PR), so the review POLICY must come from the base ref instead. Reads
-    the config blob via read-only ``git show <base_ref>:<name>`` — no network, no
-    write. Any failure (no base config, not a git repo, parse error) returns
-    ``None`` and the caller falls back to the head config with a warning.
+    the config blob via read-only ``git show <ref>:<name>`` — no network, no
+    write.
+
+    A BARE branch name fails on a detached-HEAD CI checkout (where no local
+    ``<base>`` branch exists), so we RETRY the remote-tracking refs
+    (``origin/<base>``, ``refs/remotes/origin/<base>``) before giving up — a
+    detached checkout must NOT silently fall back to trusting the PR-head config.
+    Any unresolved-everywhere case (no base config, not a git repo, parse error)
+    returns ``None`` and the caller warns + degrades loudly.
     """
     import subprocess
 
     root = repo_root or Path.cwd()
-    for name in DEFAULT_CONFIG_NAMES:
-        try:
-            proc = subprocess.run(
-                ["git", "show", f"{base_ref}:{name}"],
-                cwd=str(root),
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):  # pragma: no cover - defensive
-            return None
-        if proc.returncode != 0 or not proc.stdout.strip():
-            continue
-        try:
-            import yaml
+    for ref in _base_ref_candidates(base_ref):
+        for name in DEFAULT_CONFIG_NAMES:
+            try:
+                proc = subprocess.run(
+                    ["git", "show", f"{ref}:{name}"],
+                    cwd=str(root),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):  # pragma: no cover - defensive
+                return None
+            if proc.returncode != 0 or not proc.stdout.strip():
+                continue
+            try:
+                import yaml
 
-            data = yaml.safe_load(proc.stdout) or {}
-            return load_config(data)
-        except Exception:  # pragma: no cover - defensive
-            return None
+                data = yaml.safe_load(proc.stdout) or {}
+                return load_config(data)
+            except Exception:  # pragma: no cover - defensive
+                return None
     return None
 
 
@@ -95,12 +121,15 @@ def _apply_policy_trust_boundary(head: Config, base: Optional[Config]) -> Config
     """Anchor the review POLICY to the trusted BASE config (SPEC 12 trust boundary).
 
     ``.openrabbit.yaml`` is config-as-policy. A PR head can self-weaken review by
-    raising ``confidence_gate`` (suppressing findings), dropping ``lenses``, or
-    adding ``path_filters`` that exclude the changed file. Those three policy
-    fields are therefore taken from the trusted ``base`` config; everything else
-    (BYO ``model_roles``, telemetry, profile, ...) stays from the head so a fork
-    that lacks model wiring still runs. ``base is None`` (no base config found) is
-    a no-op — the caller warns separately — so this never crashes the run.
+    raising ``confidence_gate`` (suppressing findings), dropping ``lenses``,
+    adding ``path_filters`` that exclude the changed file, or injecting
+    ``path_instructions`` that tell the finder to ignore the changed file's
+    issues (finding-suppression guidance baked into the cacheable finder prefix).
+    Those policy fields are therefore taken from the trusted ``base`` config;
+    everything else (BYO ``model_roles``, telemetry, profile, ...) stays from the
+    head so a fork that lacks model wiring still runs. ``base is None`` (no base
+    config found) is a no-op — the caller warns separately — so this never
+    crashes the run.
     """
     if base is None:
         return head
@@ -109,6 +138,7 @@ def _apply_policy_trust_boundary(head: Config, base: Optional[Config]) -> Config
         confidence_gate=base.review.confidence_gate,
         lenses=list(base.review.lenses),
         path_filters=list(base.review.path_filters),
+        path_instructions=list(base.review.path_instructions),
     )
     return dataclasses.replace(head, review=boundary_review)
 
@@ -323,9 +353,14 @@ def _cmd_review_online(
     if base_ref:
         base_config = _load_base_config(base_ref, Path.cwd())
         if base_config is None:
+            tried = ", ".join(_base_ref_candidates(base_ref))
             print(
-                f"openrabbit: warning: could not read .openrabbit.yaml from base ref "
-                f"{base_ref!r}; using the PR head config as policy (untrusted)",
+                "openrabbit: WARNING [policy-trust]: could not read .openrabbit.yaml "
+                f"from any trusted base ref (tried: {tried}); FALLING BACK to the PR "
+                "HEAD config as policy — this is UNTRUSTED for a fork/external PR and "
+                "a head-side weakening of confidence_gate/lenses/path_filters/"
+                "path_instructions WILL be honored. Ensure the base ref is fetched "
+                "(e.g. `git fetch origin <base>`) so the trusted base policy loads.",
                 file=sys.stderr,
             )
         else:
@@ -394,6 +429,11 @@ def _cmd_review_online(
             walkthrough = walkthrough_mod.build_walkthrough(
                 pr_context, plan.files, result.findings, stats=stats
             )
+            # Diff-anchor guard (route.py): forward the per-file valid
+            # ``{(side, line)}`` anchor sets + the PR's real changed-file set so
+            # the adapter DROPS any out-of-diff (hallucinated) comment BEFORE the
+            # single batched createReview. Without these, one bad (side, line)
+            # 422s the whole batch and posts zero comments.
             emit_mod.emit_github(
                 adapter,
                 result.findings,
@@ -401,6 +441,8 @@ def _cmd_review_online(
                 commit_sha=str(args.commit),
                 walkthrough_markdown=walkthrough,
                 prior_threads=prior_threads,
+                valid_positions=route_mod.valid_positions_by_file(plan),
+                changed_files={f.path for f in plan.files},
             )
         _print_result(result)
         return 0
@@ -648,14 +690,28 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         verifier_provider = (
             orch.model_factory(verifier_role) if verifier_role else review_provider
         )
+        # The verifier is a DISTINCT cross-family model (GPT-5.5) from the finder
+        # (Nova), so passing it as ``judge_provider`` means the verifier never
+        # self-grades the very findings it produced — the judge is a different
+        # family from the finder. When no separate verifier role exists we fall
+        # back to the finder (single-model run).
+        judge_provider = verifier_provider
+        # Real-clean controls (mined from the repo's clean commits) are ON by
+        # default for a live run so the FP denominator is NOT synthetic
+        # trailing-whitespace no-ops (which collapse FP to ~0 and always pass).
+        # ``--no-real-clean-controls`` opts out (e.g. a repo with no minable
+        # clean history) but then the gate measures whitespace only.
+        include_real_clean = getattr(args, "real_clean_controls", True)
         report = run_eval(
             repo,
             provider=review_provider,
             verifier_provider=verifier_provider,
-            judge_provider=verifier_provider,
+            judge_provider=judge_provider,
             config=config,
             limit=args.limit,
             mode=LIVE_MODE,
+            corpus_path=getattr(args, "corpus", None),
+            include_real_clean_controls=include_real_clean,
         )
     else:
         # Offline scripted fixtures: a flagging reviewer + match judge. ``mode``
@@ -667,6 +723,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
             config=config,
             limit=args.limit,
             mode="fixture",
+            corpus_path=getattr(args, "corpus", None),
         )
 
     if args.json:
@@ -696,7 +753,31 @@ def _cmd_eval(args: argparse.Namespace) -> int:
             )
     # The pass/fail gate is only honored for a live (--online) run; offline
     # --require-pass already hard-errored above, so a fixture run can never pass.
-    return 0 if report.scorecard.passed or not args.require_pass else 1
+    if args.require_pass:
+        # Degenerate-corpus guard: ``false_positive_rate`` is ``fp/(fp+tn)`` and
+        # returns 0.0 when the denominator is empty — so a run with NO negative
+        # controls (or that made zero provider calls) would VACUOUSLY "pass"
+        # without measuring anything. A --require-pass gate must never pass on an
+        # empty/near-empty corpus; fail closed and say why.
+        overall = report.scorecard.overall
+        fp_denominator = overall.fp + overall.tn
+        if (
+            fp_denominator == 0
+            or report.control_count == 0
+            or report.call_count == 0
+        ):
+            print(
+                "error: --require-pass cannot pass on a degenerate/near-empty "
+                f"corpus (controls={report.control_count}, "
+                f"fp+tn denominator={fp_denominator}, provider calls="
+                f"{report.call_count}). The false-positive rate has no denominator, "
+                "so it is not a real measurement. Point --repo / --corpus at a repo "
+                "with reviewable history (and keep real-clean controls on).",
+                file=sys.stderr,
+            )
+            return 1
+        return 0 if report.scorecard.passed else 1
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -857,6 +938,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="cap the golden set to the first N bug samples (smoke/CI)",
     )
     ev.add_argument(
+        "--corpus",
+        help=(
+            "path to a COMMITTED golden JSONL corpus to load instead of live "
+            "mining (reproducible). When the file exists it is used as-is."
+        ),
+    )
+    ev.add_argument(
         "--json",
         action="store_true",
         help="emit the EvalReport (scorecard + corpus sizes) as JSON",
@@ -868,6 +956,28 @@ def build_parser() -> argparse.ArgumentParser:
             "use real Bedrock providers for a real FP measurement (requires "
             "creds; item 20). Default is offline scripted fixtures."
         ),
+    )
+    # Real-clean negative controls are ON by default for the --online FP
+    # measurement: without them the FP denominator is synthetic
+    # trailing-whitespace no-ops, so FP collapses to ~0 and --require-pass always
+    # passes. ``--no-real-clean-controls`` opts out (then the gate measures
+    # whitespace only).
+    ev.add_argument(
+        "--real-clean-controls",
+        dest="real_clean_controls",
+        action="store_true",
+        default=True,
+        help=(
+            "augment the synthetic whitespace controls with REAL-clean controls "
+            "mined from the repo so the FP denominator is not whitespace-only "
+            "(default ON for --online)"
+        ),
+    )
+    ev.add_argument(
+        "--no-real-clean-controls",
+        dest="real_clean_controls",
+        action="store_false",
+        help="disable real-clean controls (FP gate then measures whitespace only)",
     )
     ev.add_argument(
         "--require-pass",

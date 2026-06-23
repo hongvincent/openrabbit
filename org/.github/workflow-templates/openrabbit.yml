@@ -54,5 +54,11 @@ jobs:
       commit: ${{ github.event.pull_request.head.sha }}
       config: .openrabbit.yaml
       aws_region: us-east-2
+      # PR target branch — the reusable workflow fetches origin/<base_ref> and
+      # passes --base-ref so the review POLICY (gate/lenses/path_filters) anchors
+      # to the TRUSTED base config, not the attacker-controlled PR head
+      # (SPEC §12 trust boundary). The PR head .openrabbit.yaml can never weaken
+      # review relative to this ref.
+      base_ref: ${{ github.base_ref }}
     secrets:
       aws_role_arn: ${{ secrets.OPENRABBIT_AWS_ROLE_ARN }}

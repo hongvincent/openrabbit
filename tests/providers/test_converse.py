@@ -367,6 +367,28 @@ def test_reasoning_effort_absent_omits_reasoning_config(install_boto3):
     assert "additionalModelRequestFields" not in client.calls[0]
 
 
+@pytest.mark.parametrize("bad", ["minimal", "xhigh", "LOWish", "1", "ultra", "yes"])
+def test_invalid_reasoning_effort_raises_not_silently_disabled(install_boto3, bad):
+    """An UNRECOGNIZED, non-disable effort must RAISE — not silently disable.
+
+    Live-wiring gap: a typo'd ``reasoning_effort`` (e.g. ``"minimal"``,
+    ``"xhigh"``) previously normalized to ``None``, so the Converse finder/
+    verifier call silently ran reasoning OFF and burned a non-thinking pass while
+    the operator believed extended thinking was on. The Responses adapter already
+    raises on the same typo; this pins parity. Exercised through the REAL
+    ``complete()`` -> ``_build_request`` path (not the isolated normalizer) so the
+    wiring that production hits is what fails.
+    """
+    _fake, client = install_boto3(responses=[_text_resp()])
+    from openrabbit.providers.converse import ConverseAdapter
+
+    a = ConverseAdapter(model_id="m", region="r")
+    with pytest.raises(ProviderError, match="reasoning effort"):
+        a.complete("s", [Message("user", "x")], None, 100, None, reasoning_effort=bad)
+    # The bad request must never reach the wire.
+    assert client.calls == []
+
+
 def test_reasoning_effort_high_omits_temperature_top_p_top_k(install_boto3):
     """High effort MUST omit temperature/topP/topK (else Nova 2 ValidationException)."""
     _fake, client = install_boto3(responses=[_text_resp()])

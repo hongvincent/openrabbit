@@ -1,8 +1,9 @@
 """Live smoke: the eval harness ONLINE against openrabbit's OWN git history.
 
-Runs the real review pipeline end-to-end with REAL providers — Nova finder +
-GPT-5.5 cross-family verifier + GPT-5.5 judge — over a tiny slice of this repo's
-own commits. This is the integration that 1000+ unit tests cannot cover: it
+Runs the real review pipeline end-to-end with REAL providers — Nova 2 Lite
+finder + GPT-5.4 cross-family verifier + GPT-5.4 judge — over a tiny slice of
+this repo's own commits. This is the integration that 1000+ unit tests cannot
+cover: it
 exercises ``orchestrator.review`` -> ``run_lenses`` -> ``verify_findings`` ->
 ``judge`` against live Bedrock, the same wiring the CLI's ``eval --online`` uses.
 
@@ -31,10 +32,10 @@ EVAL_LIMIT = 2
 
 
 def _live_config() -> Config:
-    """A Config with the verified live model roles (apac Nova + GPT-5.5).
+    """A Config with the verified live model roles (global Nova 2 Lite + GPT-5.4).
 
-    Mirrors the CLI's ``eval --online`` wiring: a Nova finder in Seoul and a
-    GPT-5.5 cross-family verifier/judge in us-east-2. ``reasoning_effort=low``
+    Mirrors the CLI's ``eval --online`` wiring: a Nova 2 Lite finder in Seoul and
+    a GPT-5.4 cross-family verifier/judge in us-east-2. ``reasoning_effort=low``
     on the verifier keeps the (paid) judge/verify calls cheap.
     """
     return Config(
@@ -54,8 +55,8 @@ def _live_config() -> Config:
 def test_live_eval_online_smoke(aws_profile_env: str, bearer_token: str) -> None:
     config = _live_config()
 
-    # Build the real providers exactly as the CLI does: Nova finder + GPT-5.5
-    # verifier driving BOTH the in-pipeline verify pass and the judge.
+    # Build the real providers exactly as the CLI does: Nova 2 Lite finder +
+    # GPT-5.4 verifier driving BOTH the in-pipeline verify pass and the judge.
     finder = orch.model_factory(config.model_roles["finder"])
     verifier = orch.model_factory(config.model_roles["verifier"])
 

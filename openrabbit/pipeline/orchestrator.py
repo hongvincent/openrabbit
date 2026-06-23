@@ -376,12 +376,21 @@ def review(
 
     # Stage 5 — verify (drop below gate). Skip entirely when nothing to verify.
     high_risk_files = {f.path for f in plan.files if f.risk == "high"}
+    # Pass the verifier role's reasoning_effort so verify_findings can size the
+    # verifier's token budget to leave headroom for (billed) reasoning tokens —
+    # otherwise a reasoning verifier truncates its function_call JSON and the
+    # soft-skip fallback silently posts un-verified findings.
+    verifier_role = config.model_roles.get("verifier")
+    verifier_effort = (
+        verifier_role.options.get("reasoning_effort") if verifier_role else None
+    )
     verified = verify_mod.verify_findings(
         verifier,
         raw_findings,
         gate=config.review.confidence_gate,
         min_severity=config.review.verify_min_severity,
         high_risk_files=high_risk_files,
+        verifier_reasoning_effort=verifier_effort,
     )
 
     # Feedback loop (SPEC 10, the trust differentiator): down-weight findings

@@ -487,6 +487,89 @@ class TestRunLenses:
         assert "reasoning_effort" not in finder.calls[0].opts
 
 
+class TestRunLensesReasoningMaxTokens:
+    """Item 2: a reasoning-on lens must get a LARGER maxTokens floor.
+
+    Live-wiring gap: the shipped config turns on LOW reasoning for the
+    correctness/security lenses, but ``run_lenses`` passed the flat
+    ``DEFAULT_FINDER_MAX_TOKENS == 4096`` to EVERY finder call. AWS recommends
+    ``maxTokens >= 15000`` even for LOW effort, so a reasoning finder call could
+    burn its whole budget on (billed) reasoning tokens and truncate before any
+    findings tool call — silently losing findings. These tests drive the real
+    ``run_lenses`` call site the orchestrator uses (with ``lens_reasoning_effort``
+    set) and assert the budget reaching the provider, not an isolated helper.
+    """
+
+    def test_reasoning_on_lens_uses_larger_max_tokens_floor(self, config):
+        plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness"])
+        pf = next(f for f in plan.files if f.path == "src/api/auth.py")
+        finder = FakeProvider([_emit_findings_result([])])
+        run_lenses_mod.run_lenses(
+            finder,
+            pf,
+            lens_prompts={"correctness": "COR"},
+            prefix="P",
+            lens_reasoning_effort={"correctness": "low"},
+        )
+        # The reasoning-on lens must get at least the AWS-recommended LOW floor.
+        assert finder.calls[0].opts.get("reasoning_effort") == "low"
+        assert finder.calls[0].max_tokens >= run_lenses_mod.REASONING_FINDER_MAX_TOKENS
+        assert finder.calls[0].max_tokens >= 15000
+
+    def test_reasoning_off_lens_keeps_small_max_tokens(self, config):
+        plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness"])
+        pf = next(f for f in plan.files if f.path == "src/api/auth.py")
+        finder = FakeProvider([_emit_findings_result([])])
+        # No effort configured for this lens -> reasoning OFF -> small budget.
+        run_lenses_mod.run_lenses(
+            finder, pf, lens_prompts={"correctness": "COR"}, prefix="P"
+        )
+        assert "reasoning_effort" not in finder.calls[0].opts
+        assert finder.calls[0].max_tokens == run_lenses_mod.DEFAULT_FINDER_MAX_TOKENS
+
+    def test_mixed_lenses_get_per_lens_budgets(self, config):
+        # correctness => reasoning ON (large budget); maintainability => OFF (small).
+        plan = route_mod.route_diff(
+            SAMPLE_DIFF, lenses=["correctness", "maintainability"]
+        )
+        pf = next(f for f in plan.files if f.path == "src/api/auth.py")
+        finder = FakeProvider([_emit_findings_result([]), _emit_findings_result([])])
+        run_lenses_mod.run_lenses(
+            finder,
+            pf,
+            lens_prompts={"correctness": "COR", "maintainability": "MNT"},
+            prefix="P",
+            lens_reasoning_effort={"correctness": "low"},
+        )
+        by_lens = {}
+        for call in finder.calls:
+            for lens in ("correctness", "maintainability"):
+                if f"--- LENS: {lens} ---" in call.system:
+                    by_lens[lens] = call
+        assert by_lens["correctness"].max_tokens >= 15000
+        assert (
+            by_lens["maintainability"].max_tokens
+            == run_lenses_mod.DEFAULT_FINDER_MAX_TOKENS
+        )
+
+    def test_explicit_max_tokens_floor_not_lowered_for_reasoning_lens(self, config):
+        # If a caller passes a HIGHER explicit max_tokens, the reasoning floor must
+        # not shrink it; the larger of (explicit, floor) wins so we never truncate.
+        plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness"])
+        pf = next(f for f in plan.files if f.path == "src/api/auth.py")
+        finder = FakeProvider([_emit_findings_result([])])
+        run_lenses_mod.run_lens(
+            finder,
+            pf,
+            "correctness",
+            "COR",
+            prefix="P",
+            reasoning_effort="low",
+            max_tokens=20000,
+        )
+        assert finder.calls[0].max_tokens == 20000
+
+
 # --------------------------------------------------------------------------- #
 # verify                                                                       #
 # --------------------------------------------------------------------------- #
@@ -1426,6 +1509,47 @@ class TestRoleOptionsThreaded:
         assert "high" in efforts, (
             "configured verifier reasoning_effort:high was dropped — not threaded "
             f"to complete(); recorded efforts: {efforts!r}"
+        )
+
+    def test_verifier_reasoning_budget_leaves_headroom(self, monkeypatch):
+        # Wiring guard: with the verifier configured reasoning_effort:high, the
+        # orchestrator must thread that effort into verify_findings so the
+        # verifier's max_output_tokens is sized for (billed) reasoning headroom —
+        # else the reasoning trace truncates the function_call JSON and the
+        # soft-skip silently posts un-verified findings.
+        from openrabbit.pipeline.verify import MIN_REASONING_VERIFY_MAX_TOKENS
+
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        bedrock = _CaptureBedrockClient()
+        monkeypatch.setitem(
+            __import__("sys").modules, "boto3", _CaptureBoto3(bedrock)
+        )
+        responses = _CaptureResponsesRecorder()
+        responses.install(monkeypatch)
+
+        config = self._config()
+        providers = orch_mod.build_providers(config)
+        pr_context = {
+            "draft": False,
+            "state": "open",
+            "head_sha": "DEADBEEF",
+            "repo": "acme/widgets",
+            "diff": self._DIFF,
+        }
+        bedrock.converse = self._finder_then_emit(bedrock)
+        orch_mod.review(config, pr_context, providers, emit=False)
+
+        assert responses.bodies, "verifier was never called"
+        budgets = [b.get("max_output_tokens") for b in responses.bodies]
+        assert any(
+            isinstance(x, int) and x >= MIN_REASONING_VERIFY_MAX_TOKENS
+            for x in budgets
+        ), (
+            "verifier reasoning_effort:high did not raise the verify budget to the "
+            f"reasoning floor ({MIN_REASONING_VERIFY_MAX_TOKENS}); recorded "
+            f"max_output_tokens: {budgets!r} — orchestrator likely did not thread "
+            "verifier_reasoning_effort into verify_findings"
         )
 
     @staticmethod
