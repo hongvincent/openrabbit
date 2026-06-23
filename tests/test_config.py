@@ -294,6 +294,58 @@ def test_verify_min_severity_invalid_rejected():
         load_config({"review": {"verify_min_severity": "spicy"}})
 
 
+def test_always_verify_categories_default_is_trust_core():
+    # Trust-core lenses (correctness/security) route through the verifier
+    # REGARDLESS of severity by default (verify-strict thesis).
+    cfg = load_config({})
+    assert cfg.review.always_verify_categories == frozenset({"correctness", "security"})
+
+
+def test_always_verify_categories_configurable():
+    cfg = load_config(
+        {"review": {"always_verify_categories": ["correctness", "security", "tests"]}}
+    )
+    assert cfg.review.always_verify_categories == frozenset(
+        {"correctness", "security", "tests"}
+    )
+
+
+def test_always_verify_categories_can_be_emptied():
+    cfg = load_config({"review": {"always_verify_categories": []}})
+    assert cfg.review.always_verify_categories == frozenset()
+
+
+def test_always_verify_categories_unknown_rejected():
+    with pytest.raises(ConfigError):
+        load_config({"review": {"always_verify_categories": ["correctness", "bogus"]}})
+
+
+def test_unverified_confidence_gate_default_is_high():
+    # Findings that bypass the verifier (below severity AND not trust-core) must
+    # clear a HIGHER bar than the normal gate to post unverified (low-noise).
+    cfg = load_config({})
+    assert cfg.review.unverified_confidence_gate == 0.9
+
+
+def test_unverified_confidence_gate_configurable():
+    cfg = load_config({"review": {"unverified_confidence_gate": 0.95}})
+    assert cfg.review.unverified_confidence_gate == 0.95
+
+
+def test_unverified_confidence_gate_must_be_ge_confidence_gate():
+    # The unverified bar must never be LOOSER than the normal gate — that would
+    # re-open the leak it exists to close.
+    with pytest.raises(ConfigError):
+        load_config(
+            {"review": {"confidence_gate": 0.85, "unverified_confidence_gate": 0.80}}
+        )
+
+
+def test_unverified_confidence_gate_out_of_range_rejected():
+    with pytest.raises(ConfigError):
+        load_config({"review": {"unverified_confidence_gate": 1.5}})
+
+
 def test_invalid_telemetry_mode_rejected():
     with pytest.raises(ConfigError):
         load_config({"telemetry": {"mode": "always"}})

@@ -42,6 +42,16 @@ _LOG = logging.getLogger(__name__)
 VERIFY_TOOL = "verify_findings"
 DEFAULT_GATE = 0.80
 DEFAULT_VERIFY_MIN_SEVERITY = "high"
+# TRUST-CORE categories: routed through the verifier REGARDLESS of severity so a
+# hallucinated medium/correctness finding is actually re-checked (and refuted)
+# instead of posting blind via the cheap finder-confidence path (verify-strict).
+DEFAULT_ALWAYS_VERIFY_CATEGORIES: frozenset[str] = frozenset(
+    {"correctness", "security"}
+)
+# Higher confidence bar a finding must clear to post UN-verified (when it bypassed
+# the verifier). Kept independent of openrabbit.config so this module has no
+# import-time dependency on the config layer (mirrors DEFAULT_VERIFY_MIN_SEVERITY).
+DEFAULT_UNVERIFIED_GATE = 0.9
 # A per-batch token budget that scales with the number of findings; capped so a
 # huge batch can't blow the budget. Each verdict is small (keep + score + short
 # rationale), so a modest per-finding allotment is plenty.
@@ -137,9 +147,20 @@ def _severity_rank(severity: str) -> int:
     return _SEVERITY_RANK.get(severity, len(SEVERITIES))
 
 
-def _should_verify(finding: Finding, min_rank: int) -> bool:
-    """True when the finding is at least as severe as the threshold."""
-    return _severity_rank(finding.severity) <= min_rank
+def _should_verify(
+    finding: Finding, min_rank: int, always_verify_categories: frozenset[str]
+) -> bool:
+    """True when the finding must take the (expensive) cross-family verifier.
+
+    Verify-strict routing: a finding is verified when it is at least as severe as
+    the threshold (``rank <= min_rank``) OR its category is TRUST-CORE
+    (``always_verify_categories``, default {correctness, security}). The latter
+    ensures a hallucinated medium/correctness finding is actually re-checked
+    instead of posting blind via the cheap finder-confidence path.
+    """
+    if _severity_rank(finding.severity) <= min_rank:
+        return True
+    return finding.category in always_verify_categories
 
 
 def _reasoning_is_on(verifier_reasoning_effort: Optional[str]) -> bool:
@@ -280,17 +301,28 @@ def verify_findings(
     *,
     gate: float = DEFAULT_GATE,
     min_severity: str = DEFAULT_VERIFY_MIN_SEVERITY,
+    always_verify_categories: Optional[frozenset[str]] = None,
+    unverified_confidence_gate: Optional[float] = None,
     high_risk_files: Optional[set[str]] = None,
     max_tokens: Optional[int] = None,
     verifier_reasoning_effort: Optional[str] = None,
 ) -> list[Finding]:
     """Verify a batch of findings; return only those that pass the gate.
 
-    Severity scoping (SPEC 7.3): findings at least as severe as ``min_severity``
-    (default ``high`` -> HIGH/CRITICAL) take the cross-family verifier in ONE
-    batched call. Less-severe findings take the cheaper path — their finder
-    confidence is run straight through ``gate`` with no model call. Order is
-    preserved.
+    Verify-strict routing (SPEC 7.3 + the FP-leak fix): a finding takes the
+    cross-family verifier in ONE batched call when it is at least as severe as
+    ``min_severity`` (default ``high`` -> HIGH/CRITICAL) **OR** its category is
+    TRUST-CORE (``always_verify_categories``, default {correctness, security}).
+    The trust-core clause ensures a hallucinated medium/correctness finding is
+    actually re-checked (and refuted) instead of posting blind.
+
+    Findings that STILL bypass the verifier (below severity AND not trust-core)
+    take the cheaper path — their finder confidence is run through the
+    ``unverified_confidence_gate`` (a HIGHER bar than ``gate``, default
+    :data:`~openrabbit.config.DEFAULT_UNVERIFIED_CONFIDENCE_GATE` 0.9) with no
+    model call, so low/maintainability nitpicks at ~0.8 are dropped rather than
+    posted UN-verified (low-noise). When unset it defaults to ``max(gate, 0.9)``
+    so it is never looser than the normal gate. Order is preserved.
 
     ``high_risk_files`` is an optional set of paths that trigger the
     recall-recovery nudge in the verifier prompt when any verified finding lives
@@ -309,14 +341,31 @@ def verify_findings(
 
     high_risk_files = high_risk_files or set()
     min_rank = _severity_rank(min_severity)
+    if always_verify_categories is None:
+        always_verify_categories = DEFAULT_ALWAYS_VERIFY_CATEGORIES
+    # The unverified bar is never looser than the normal gate (a looser bar would
+    # re-open the FP leak). Default to the higher of (gate, 0.9).
+    if unverified_confidence_gate is None:
+        unverified_confidence_gate = max(gate, DEFAULT_UNVERIFIED_GATE)
+    else:
+        unverified_confidence_gate = max(gate, unverified_confidence_gate)
 
     to_verify: list[Finding] = []
     cheap: list[Finding] = []
     for finding in findings:
-        (to_verify if _should_verify(finding, min_rank) else cheap).append(finding)
+        target = (
+            to_verify
+            if _should_verify(finding, min_rank, always_verify_categories)
+            else cheap
+        )
+        target.append(finding)
 
-    # Cheaper path: trust the finder's confidence, apply the gate only. No call.
-    cheap_kept = {id(f): f for f in cheap if f.confidence >= gate}
+    # Cheaper path: trust the finder's confidence, but apply the HIGHER
+    # unverified bar (not the normal gate) — these were never vetted by the
+    # verifier, so they must clear a stricter confidence threshold. No call.
+    cheap_kept = {
+        id(f): f for f in cheap if f.confidence >= unverified_confidence_gate
+    }
 
     verified_kept: dict[int, Finding] = {}
     if to_verify:

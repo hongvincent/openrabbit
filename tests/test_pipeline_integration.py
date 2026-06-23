@@ -579,15 +579,16 @@ def _finding(
     severity: str = "high",
     rule: str = "openrabbit/security/sqli",
     file: str = "src/api/auth.py",
+    category: str = "security",
 ) -> Finding:
-    fp = compute_fingerprint(file, rule, f"ctx-{conf}-{severity}")
+    fp = compute_fingerprint(file, rule, f"ctx-{conf}-{severity}-{category}")
     return Finding(
         file=file,
         start_line=12,
         end_line=14,
         side="RIGHT",
         severity=severity,
-        category="security",
+        category=category,
         confidence=conf,
         title="t",
         body="b",
@@ -664,14 +665,17 @@ class TestVerifyBatchingAndScoping:
         assert [f.rule_id for f in kept] == ["r1"]  # r2 below gate → dropped
 
     def test_only_high_critical_verified_by_default(self, config):
-        # MEDIUM/LOW/nit findings must NOT hit the expensive verifier; HIGH and
-        # CRITICAL do. With one HIGH + one CRITICAL + one MEDIUM + one LOW, the
-        # verifier batch carries exactly the two severe ones.
+        # Severity scoping for NON-trust-core categories: MEDIUM/LOW findings
+        # outside {correctness, security} must NOT hit the expensive verifier;
+        # HIGH and CRITICAL do. (Trust-core mediums route regardless of severity —
+        # see TestVerifyTrustCoreRoutingAndUnverifiedGate.) With one HIGH + one
+        # CRITICAL severe finding + one MEDIUM + one LOW maintainability finding,
+        # the verifier batch carries exactly the two severe ones.
         findings = [
             _finding(0.95, severity="high", rule="r-high"),
             _finding(0.95, severity="critical", rule="r-crit"),
-            _finding(0.95, severity="medium", rule="r-med"),
-            _finding(0.95, severity="low", rule="r-low"),
+            _finding(0.95, severity="medium", category="maintainability", rule="r-med"),
+            _finding(0.95, severity="low", category="maintainability", rule="r-low"),
         ]
         verifier = FakeProvider(
             [_verify_batch_result([(0, True, 0.90), (1, True, 0.90)])]
@@ -681,13 +685,16 @@ class TestVerifyBatchingAndScoping:
         )
         # Exactly one verifier call carrying the two severe findings.
         assert len(verifier.calls) == 1
-        # The cheaper-path (medium/low) findings still survive via the gate
-        # using their finder confidence (0.95 >= 0.80), so all 4 are kept.
+        # The cheaper-path (non-trust-core medium/low) findings still survive via
+        # the unverified bar using their finder confidence (0.95 >= 0.9), so all
+        # four are kept.
         assert {f.rule_id for f in kept} == {"r-high", "r-crit", "r-med", "r-low"}
 
     def test_cheaper_path_findings_apply_gate_without_verifier(self, config):
-        # A MEDIUM finding below the gate is dropped WITHOUT a verifier call.
-        findings = [_finding(0.50, severity="medium", rule="r-med")]
+        # A non-trust-core MEDIUM finding below the gate is dropped WITHOUT a
+        # verifier call. (maintainability, not security: a trust-core medium would
+        # now route to the verifier — that is the verify-strict fix.)
+        findings = [_finding(0.50, severity="medium", category="maintainability", rule="r-med")]
         verifier = FakeProvider([])  # must never be called
         kept = verify_mod.verify_findings(
             verifier, findings, gate=0.80, min_severity="high"
@@ -696,10 +703,12 @@ class TestVerifyBatchingAndScoping:
         assert verifier.calls == []
 
     def test_no_verifier_call_when_nothing_severe(self, config):
-        # All findings below the severity threshold -> ZERO verifier calls.
+        # All findings below the severity threshold AND non-trust-core -> ZERO
+        # verifier calls. (Trust-core lesser findings would route — see the
+        # verify-strict tests.) At 0.95 they clear the higher unverified bar.
         findings = [
-            _finding(0.95, severity="medium", rule="r1"),
-            _finding(0.95, severity="low", rule="r2"),
+            _finding(0.95, severity="medium", category="maintainability", rule="r1"),
+            _finding(0.95, severity="low", category="performance", rule="r2"),
         ]
         verifier = FakeProvider([])
         kept = verify_mod.verify_findings(
@@ -709,11 +718,13 @@ class TestVerifyBatchingAndScoping:
         assert {f.rule_id for f in kept} == {"r1", "r2"}
 
     def test_config_can_widen_scope_to_medium(self, config):
-        # Widening min_severity=medium routes MEDIUM through the verifier too.
+        # Widening min_severity=medium routes MEDIUM through the verifier too. The
+        # LOW finding is non-trust-core so it stays on the cheaper path (a
+        # trust-core low would route regardless — see the verify-strict tests).
         findings = [
             _finding(0.95, severity="high", rule="r-high"),
             _finding(0.95, severity="medium", rule="r-med"),
-            _finding(0.95, severity="low", rule="r-low"),
+            _finding(0.95, severity="low", category="maintainability", rule="r-low"),
         ]
         verifier = FakeProvider(
             [_verify_batch_result([(0, True, 0.90), (1, True, 0.90)])]
@@ -723,6 +734,7 @@ class TestVerifyBatchingAndScoping:
         )
         assert len(verifier.calls) == 1
         # batch carried 2 (high + medium); low took the cheaper path and survived
+        # (0.95 >= the higher unverified bar).
         assert {f.rule_id for f in kept} == {"r-high", "r-med", "r-low"}
 
     def test_empty_findings_no_call(self, config):
@@ -737,6 +749,136 @@ class TestVerifyBatchingAndScoping:
         verifier = FakeProvider([_verify_batch_result([(0, True, 0.95)])])
         kept = verify_mod.verify_findings(verifier, findings, gate=0.80)
         assert [f.rule_id for f in kept] == ["r1"]
+
+
+class TestVerifyTrustCoreRoutingAndUnverifiedGate:
+    """Verify-strict thesis: trust-core findings (correctness/security) route to
+    the verifier REGARDLESS of severity, and findings that still bypass the
+    verifier must clear a HIGHER unverified-confidence bar than the normal gate.
+
+    These close the measured FP leak: a hallucinated MEDIUM/correctness finding
+    used to post UN-verified via the cheap finder-confidence-through-gate path
+    (the verifier never saw it), and low/maintainability nitpicks at ~0.8 posted
+    unverified instead of being dropped.
+    """
+
+    def test_medium_correctness_is_routed_to_verifier_and_refuted_drops(self, config):
+        # The dc96cca hallucination class: a MEDIUM/correctness finding the finder
+        # was 0.85-confident about. It is BELOW verify_min_severity=high, but
+        # correctness is a trust-core category, so it MUST hit the verifier — and a
+        # keep=false verdict drops it instead of posting blind.
+        findings = [
+            _finding(0.85, severity="medium", category="correctness", rule="dup-ids")
+        ]
+        verifier = FakeProvider([_verify_batch_result([(0, False, 0.99)])])
+        kept = verify_mod.verify_findings(
+            verifier, findings, gate=0.80, min_severity="high"
+        )
+        assert len(verifier.calls) == 1, (
+            "a trust-core (correctness) finding must route to the verifier even "
+            "below verify_min_severity"
+        )
+        assert kept == [], "a keep=false verifier verdict must drop the finding"
+
+    def test_medium_security_below_severity_still_verified(self, config):
+        # Security is also trust-core: a MEDIUM/security finding routes to the
+        # verifier and a keep=true verdict keeps it (with the calibrated score).
+        findings = [
+            _finding(0.85, severity="medium", category="security", rule="weak-crypto")
+        ]
+        verifier = FakeProvider([_verify_batch_result([(0, True, 0.92)])])
+        kept = verify_mod.verify_findings(
+            verifier, findings, gate=0.80, min_severity="high"
+        )
+        assert len(verifier.calls) == 1
+        assert [f.rule_id for f in kept] == ["weak-crypto"]
+        assert kept[0].confidence == pytest.approx(0.92)
+
+    def test_low_maintainability_below_unverified_gate_is_dropped(self, config):
+        # A low/maintainability nitpick at 0.8 bypasses the verifier (below
+        # severity AND not trust-core). It used to post unverified because it
+        # cleared the 0.80 gate. With the higher unverified bar (0.9) it is
+        # DROPPED, and the verifier is never called.
+        findings = [
+            _finding(0.80, severity="low", category="maintainability", rule="nit")
+        ]
+        verifier = FakeProvider([])  # must never be called
+        kept = verify_mod.verify_findings(
+            verifier,
+            findings,
+            gate=0.80,
+            min_severity="high",
+            unverified_confidence_gate=0.9,
+        )
+        assert kept == [], (
+            "an unverified low/maintainability finding below the higher "
+            "unverified bar must be dropped, not posted"
+        )
+        assert verifier.calls == []
+
+    def test_high_unverified_maintainability_still_posts(self, config):
+        # The higher bar does not nuke legitimate unverified findings: a
+        # maintainability finding at 0.95 (>= unverified bar) still posts.
+        findings = [
+            _finding(0.95, severity="low", category="maintainability", rule="ok-nit")
+        ]
+        verifier = FakeProvider([])
+        kept = verify_mod.verify_findings(
+            verifier,
+            findings,
+            gate=0.80,
+            min_severity="high",
+            unverified_confidence_gate=0.9,
+        )
+        assert [f.rule_id for f in kept] == ["ok-nit"]
+        assert verifier.calls == []
+
+    def test_high_correctness_still_routes_to_verifier(self, config):
+        # No regression: a HIGH/correctness finding routes to the verifier exactly
+        # as before (it is severe AND trust-core).
+        findings = [
+            _finding(0.9, severity="high", category="correctness", rule="r-high")
+        ]
+        verifier = FakeProvider([_verify_batch_result([(0, True, 0.93)])])
+        kept = verify_mod.verify_findings(
+            verifier, findings, gate=0.80, min_severity="high"
+        )
+        assert len(verifier.calls) == 1
+        assert [f.rule_id for f in kept] == ["r-high"]
+
+    def test_always_verify_categories_override_can_add_performance(self, config):
+        # The trust-core set is config-overridable: adding "performance" routes a
+        # MEDIUM/performance finding to the verifier too.
+        findings = [
+            _finding(0.9, severity="medium", category="performance", rule="n-plus-1")
+        ]
+        verifier = FakeProvider([_verify_batch_result([(0, False, 0.95)])])
+        kept = verify_mod.verify_findings(
+            verifier,
+            findings,
+            gate=0.80,
+            min_severity="high",
+            always_verify_categories=frozenset({"correctness", "security", "performance"}),
+        )
+        assert len(verifier.calls) == 1
+        assert kept == []
+
+    def test_non_trust_core_medium_takes_unverified_path(self, config):
+        # A MEDIUM/performance finding (NOT in the default trust-core set) still
+        # bypasses the verifier and is governed by the unverified bar.
+        findings = [
+            _finding(0.85, severity="medium", category="performance", rule="perf")
+        ]
+        verifier = FakeProvider([])  # must never be called
+        kept = verify_mod.verify_findings(
+            verifier,
+            findings,
+            gate=0.80,
+            min_severity="high",
+            unverified_confidence_gate=0.9,
+        )
+        assert kept == [], "0.85 < unverified bar 0.9 -> dropped unverified"
+        assert verifier.calls == []
 
 
 # --------------------------------------------------------------------------- #

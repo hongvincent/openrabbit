@@ -218,6 +218,18 @@ def test_configuration_documents_full_reference() -> None:
     assert "confidence_gate" in low
 
 
+def test_configuration_documents_verify_strict_knobs() -> None:
+    # The verify-strict / low-noise knobs (FP-leak fix) must be documented so
+    # operators can tune trust-core routing and the unverified bar.
+    low = _lower(CONFIGURATION)
+    assert "always_verify_categories" in low, (
+        "configuration.md must document review.always_verify_categories"
+    )
+    assert "unverified_confidence_gate" in low, (
+        "configuration.md must document review.unverified_confidence_gate"
+    )
+
+
 def test_configuration_lists_all_lenses() -> None:
     low = _lower(CONFIGURATION)
     for lens in ("correctness", "security", "performance", "tests", "maintainability"):
