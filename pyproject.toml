@@ -40,8 +40,14 @@ build-backend = "hatchling.build"
 packages = ["openrabbit"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=openrabbit --cov-report=term-missing"
+# ``-m "not live"`` keeps the DEFAULT run offline: live tests make REAL paid
+# Bedrock calls and require credentials, so they must never run in the default
+# suite / offline CI. Opt in explicitly with `pytest -m live` (see tests/live/).
+addopts = "--cov=openrabbit --cov-report=term-missing -m \"not live\""
 testpaths = ["tests"]
+markers = [
+    "live: makes REAL AWS Bedrock calls (paid, needs creds); excluded by default. Run with `pytest -m live`.",
+]
 
 [tool.ruff]
 # Match the existing code style: 4.x targets, 88-col Black-compatible width.

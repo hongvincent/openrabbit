@@ -155,15 +155,34 @@ class _UsageRecordingProvider(Provider):
 # provider construction                                                        #
 # --------------------------------------------------------------------------- #
 def model_factory(role: ModelRole) -> Provider:
-    """Build a :class:`Provider` for a :class:`ModelRole` by model-id prefix.
+    """Build a :class:`Provider` for a :class:`ModelRole`, profile-prefix aware.
 
-    ``openai.*`` -> OpenAIResponsesAdapter; ``amazon.*`` / ``anthropic.*`` (incl.
-    ``global.anthropic.*``) -> ConverseAdapter. Adapters lazily import their
+    Routing goes through :func:`bedrock_models.adapter_for_model` — the single
+    source of truth that already understands cross-region inference-profile
+    prefixes (``apac.``/``us.``/``eu.``/``global.``/...). This matters because the
+    *working* Bedrock ids are often the profile form: e.g. ``amazon.nova-pro-v1:0``
+    is rejected on Converse with a ValidationException, while the inference
+    profile ``apac.amazon.nova-pro-v1:0`` is accepted. A naive
+    ``model.startswith("amazon.")`` check would route the bare id but fail to
+    route the very profile id production must use.
+
+    ``openai.*`` (incl. ``us.openai.*``) -> OpenAIResponsesAdapter;
+    ``amazon.*`` / ``anthropic.*`` (incl. ``apac.amazon.*`` / ``global.anthropic.*``)
+    -> ConverseAdapter. The FULL (prefixed) id is passed to the adapter so the
+    inference-profile id reaches the wire unchanged. Adapters lazily import their
     cloud SDKs, so this is safe to call without network at import time (only the
     eventual ``complete()`` touches the network).
     """
+    from openrabbit.bedrock_models import (
+        ADAPTER_CONVERSE,
+        ADAPTER_RESPONSES,
+        adapter_for_model,
+    )
+
     model = role.model
-    if model.startswith("openai."):
+    adapter = adapter_for_model(model)
+
+    if adapter == ADAPTER_RESPONSES:
         from openrabbit.providers.openai_responses import OpenAIResponsesAdapter
 
         kwargs: dict[str, Any] = {"model": model}
@@ -171,7 +190,7 @@ def model_factory(role: ModelRole) -> Provider:
             kwargs["region"] = role.region
         return _with_role_options(OpenAIResponsesAdapter(**kwargs), role)
 
-    if model.startswith("amazon.") or "anthropic." in model:
+    if adapter == ADAPTER_CONVERSE:
         from openrabbit.providers.converse import ConverseAdapter
 
         if role.region is None:
@@ -182,7 +201,8 @@ def model_factory(role: ModelRole) -> Provider:
 
     raise ValueError(
         f"cannot route model {model!r} to a provider adapter "
-        "(expected an 'openai.', 'amazon.', or 'anthropic.' prefix)"
+        "(expected an 'openai.', 'amazon.', or 'anthropic.' family — "
+        "optionally with a cross-region inference-profile prefix like 'apac.')"
     )
 
 

@@ -12,7 +12,7 @@ Covered:
   ToolResult blocks back
 * forced-tool structured output (emit_findings, toolChoice={tool:{name}})
 * Usage accounting from cacheRead/cacheWrite/input/output tokens
-* cachePoint insertion ordering (tools -> system -> messages) when cache_prefix
+* cachePoint insertion into system + final message (NOT tools) when cache_prefix
 * FinishReason normalization for every Converse stopReason
 * region + modelId wired from constructor into boto3.client + converse()
 """
@@ -635,7 +635,13 @@ def test_cache_point_inserted_in_system(install_boto3):
     assert sysblocks[-1] == {"cachePoint": {"type": "default"}}
 
 
-def test_cache_point_inserted_after_tools(install_boto3):
+def test_no_cache_point_in_tools_array(install_boto3):
+    """The ``tools`` array must NOT carry a cachePoint, even with cache_prefix.
+
+    Amazon Nova rejects a tool-level cache point on the real Converse API
+    (ValidationException: "extraneous key [cachePoint] is not permitted"), so the
+    adapter never appends one — the cacheable bytes live in system/messages only.
+    """
     _fake, client = install_boto3(responses=[_text_resp()])
     from openrabbit.providers.converse import ConverseAdapter
 
@@ -643,9 +649,18 @@ def test_cache_point_inserted_after_tools(install_boto3):
     a = ConverseAdapter(model_id="m", region="r")
     a.complete("sys", [Message("user", "diff")], tools, 100, "pr-1")
     tool_list = client.calls[0]["toolConfig"]["tools"]
-    assert tool_list[-1] == {"cachePoint": {"type": "default"}}
-    # the actual tool spec is still present before the cachePoint
-    assert tool_list[0]["toolSpec"]["name"] == "grep"
+    # No cachePoint entry anywhere in the tools array.
+    assert all("cachePoint" not in t for t in tool_list)
+    # The actual tool spec is present and is the only entry.
+    assert tool_list == [
+        {
+            "toolSpec": {
+                "name": "grep",
+                "description": "d",
+                "inputSchema": {"json": {"type": "object"}},
+            }
+        }
+    ]
 
 
 def test_cache_point_inserted_in_messages(install_boto3):

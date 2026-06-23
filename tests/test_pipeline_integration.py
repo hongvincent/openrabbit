@@ -1200,6 +1200,33 @@ class TestModelFactory:
         with pytest.raises(ValueError):
             orch_mod.model_factory(role)
 
+    def test_apac_nova_inference_profile_builds_converse_adapter(self):
+        """An ``apac.amazon.*`` inference-profile id must route to Converse.
+
+        Regression: the live recipe REQUIRES the inference-profile id
+        ``apac.amazon.nova-pro-v1:0`` (the bare id is rejected by the real
+        Converse API). A naive ``startswith("amazon.")`` check failed to route it;
+        routing now goes through the profile-aware ``adapter_for_model``.
+        """
+        from openrabbit.config import ModelRole
+        from openrabbit.providers.converse import ConverseAdapter
+
+        role = ModelRole(model="apac.amazon.nova-pro-v1:0", region="ap-northeast-2")
+        provider = orch_mod.model_factory(role)
+        assert isinstance(provider, ConverseAdapter)
+        # The FULL profile id reaches the adapter (it must hit the wire unchanged).
+        assert provider.model == "apac.amazon.nova-pro-v1:0"
+
+    def test_us_openai_inference_profile_builds_responses_adapter(self):
+        """A ``us.openai.*`` inference-profile id must route to Responses."""
+        from openrabbit.config import ModelRole
+        from openrabbit.providers.openai_responses import OpenAIResponsesAdapter
+
+        role = ModelRole(model="us.openai.gpt-5.5", region="us-east-2")
+        provider = orch_mod.model_factory(role)
+        assert isinstance(provider, OpenAIResponsesAdapter)
+        assert provider.model == "us.openai.gpt-5.5"
+
     def test_role_without_options_returns_bare_adapter(self):
         """No options -> the bare adapter (the common case stays unwrapped)."""
         from openrabbit.config import ModelRole
