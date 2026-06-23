@@ -147,7 +147,9 @@ def test_base_branch_is_fetched_before_review(path: Path) -> None:
     fetch_idx = -1
     for i, step in enumerate(steps):
         run = step.get("run")
-        if isinstance(run, str) and re.search(r"git\s+fetch\s+(?:--\S+\s+)*origin", run):
+        if isinstance(run, str) and re.search(
+            r"git\s+fetch\s+(?:--\S+\s+)*origin", run
+        ):
             fetch_idx = i
             break
     assert fetch_idx >= 0, (
@@ -190,7 +192,9 @@ def test_starter_template_pipes_pr_base_ref() -> None:
     input so the policy anchors to the real target branch, not a hard-coded name.
     """
     text = _text(STARTER_TEMPLATE)
-    assert re.search(r"base_ref:\s*\$\{\{\s*github\.base_ref\s*\}\}", text) or re.search(
+    assert re.search(
+        r"base_ref:\s*\$\{\{\s*github\.base_ref\s*\}\}", text
+    ) or re.search(
         r"base_ref:\s*\$\{\{\s*github\.event\.pull_request\.base\.ref\s*\}\}", text
     ), (
         "openrabbit.yml (starter): must pipe github.base_ref (or "

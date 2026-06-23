@@ -310,7 +310,9 @@ class GitHubAdapter:
             return True
         if status != 403:
             return False
-        headers = {k.lower(): v for k, v in dict(getattr(resp, "headers", {}) or {}).items()}
+        headers = {
+            k.lower(): v for k, v in dict(getattr(resp, "headers", {}) or {}).items()
+        }
         # Secondary rate limit: either an explicit Retry-After, a depleted
         # X-RateLimit-Remaining, or a body that names the secondary limit.
         if "retry-after" in headers:
@@ -330,7 +332,9 @@ class GitHubAdapter:
         (epoch seconds) hint; otherwise fall back to exponential backoff. The
         delay is bounded so a bogus header can't wedge the run.
         """
-        headers = {k.lower(): v for k, v in dict(getattr(resp, "headers", {}) or {}).items()}
+        headers = {
+            k.lower(): v for k, v in dict(getattr(resp, "headers", {}) or {}).items()
+        }
         retry_after = headers.get("retry-after")
         if retry_after is not None:
             try:
@@ -358,10 +362,7 @@ class GitHubAdapter:
         call = getattr(client, method)
         resp = call(url, **kw)
         attempt = 0
-        while (
-            self._is_rate_limited(resp)
-            and attempt < self.max_retries
-        ):
+        while self._is_rate_limited(resp) and attempt < self.max_retries:
             delay = self._retry_delay(resp, attempt)
             _LOG.warning(
                 "%s: GitHub rate limit (HTTP %s), retry %d/%d after %.1fs",
@@ -392,9 +393,7 @@ class GitHubAdapter:
     def fetch_changed_files(self) -> list[ChangedFile]:
         """Return the PR's changed files as :class:`ChangedFile` objects."""
         url = self._rest_url(f"/repos/{self.repo.slug}/pulls/{self.pr_number}/files")
-        resp = self._request(
-            "get", url, "fetch_changed_files", headers=self._headers()
-        )
+        resp = self._request("get", url, "fetch_changed_files", headers=self._headers())
         self._raise_for(resp, "fetch_changed_files")
         return [
             ChangedFile(

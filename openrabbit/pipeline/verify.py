@@ -171,7 +171,9 @@ def _reasoning_is_on(verifier_reasoning_effort: Optional[str]) -> bool:
     """
     if verifier_reasoning_effort is None:
         return False
-    return str(verifier_reasoning_effort).strip().lower() not in _REASONING_DISABLE_VALUES
+    return (
+        str(verifier_reasoning_effort).strip().lower() not in _REASONING_DISABLE_VALUES
+    )
 
 
 def _batch_max_tokens(n: int, *, reasoning: bool = False) -> int:
@@ -363,9 +365,7 @@ def verify_findings(
     # Cheaper path: trust the finder's confidence, but apply the HIGHER
     # unverified bar (not the normal gate) — these were never vetted by the
     # verifier, so they must clear a stricter confidence threshold. No call.
-    cheap_kept = {
-        id(f): f for f in cheap if f.confidence >= unverified_confidence_gate
-    }
+    cheap_kept = {id(f): f for f in cheap if f.confidence >= unverified_confidence_gate}
 
     verified_kept: dict[int, Finding] = {}
     if to_verify:

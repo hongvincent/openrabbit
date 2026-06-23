@@ -32,7 +32,9 @@ def test_bundled_sample_diff_exists():
 
 def test_bundled_sample_diff_clears_trivial_gate():
     diff = _SAMPLE_DIFF.read_text(encoding="utf-8")
-    decision = gate_mod.evaluate_gate(load_config({"version": 1}), _pr_context(diff), diff)
+    decision = gate_mod.evaluate_gate(
+        load_config({"version": 1}), _pr_context(diff), diff
+    )
     # The demo diff must be REVIEWED — never suppressed as a trivial diff.
     assert decision.should_review is True, decision.reason
     assert decision.changed_lines >= gate_mod.DEFAULT_MIN_CHANGED_LINES

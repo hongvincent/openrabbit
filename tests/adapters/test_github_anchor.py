@@ -286,7 +286,9 @@ def test_get_retries_on_429_with_retry_after():
     client = ScriptedClient(
         {
             "/pulls/7": [
-                FakeResponse(429, {"message": "rate limited"}, headers={"Retry-After": "0"}),
+                FakeResponse(
+                    429, {"message": "rate limited"}, headers={"Retry-After": "0"}
+                ),
                 FakeResponse(200, diff_text),
             ]
         }
@@ -327,7 +329,9 @@ def test_post_review_retries_on_429():
     client = ScriptedClient(
         {
             "/reviews": [
-                FakeResponse(429, {"message": "rate limited"}, headers={"Retry-After": "0"}),
+                FakeResponse(
+                    429, {"message": "rate limited"}, headers={"Retry-After": "0"}
+                ),
                 FakeResponse(200, {"id": 7}),
             ]
         }

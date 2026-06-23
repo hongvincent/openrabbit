@@ -90,8 +90,16 @@ def test_bug_sample_contains_the_buggy_code_not_the_fix(git_repo: Path):
     # The reviewer must SEE the defect: the buggy ``return a - b`` line is what
     # gets ADDED ('+') in a reverse diff (the state to review), and the corrected
     # ``return a + b`` line is what is REMOVED ('-').
-    added = [ln[1:] for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++")]
-    removed = [ln[1:] for ln in diff.splitlines() if ln.startswith("-") and not ln.startswith("---")]
+    added = [
+        ln[1:]
+        for ln in diff.splitlines()
+        if ln.startswith("+") and not ln.startswith("+++")
+    ]
+    removed = [
+        ln[1:]
+        for ln in diff.splitlines()
+        if ln.startswith("-") and not ln.startswith("---")
+    ]
     assert any("a - b" in ln for ln in added), (
         "bug sample must present the PRE-FIX buggy line as the code under review; "
         f"added lines were {added!r}"

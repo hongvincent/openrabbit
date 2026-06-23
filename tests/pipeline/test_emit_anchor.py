@@ -104,7 +104,9 @@ def test_emit_github_logs_cleanup_failure_instead_of_swallowing(caplog):
             prior_threads=stale,
         )
     # the failure surfaced in logs, not swallowed silently
-    assert any("graphql boom" in r.getMessage() or "T-gone" in r.getMessage()
-               for r in caplog.records)
+    assert any(
+        "graphql boom" in r.getMessage() or "T-gone" in r.getMessage()
+        for r in caplog.records
+    )
     # cleanup failure does not crash emit; thread not counted as resolved
     assert "T-gone" not in out["resolved_threads"]

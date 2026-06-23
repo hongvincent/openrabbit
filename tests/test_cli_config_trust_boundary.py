@@ -92,9 +92,7 @@ def test_head_path_instructions_are_not_trusted_over_base():
     resolved = cli._apply_policy_trust_boundary(head, base)
     assert resolved.review.path_instructions == base.review.path_instructions
     # And specifically the head's suppression instruction must be gone.
-    joined = " ".join(
-        pi.instructions for pi in resolved.review.path_instructions
-    )
+    joined = " ".join(pi.instructions for pi in resolved.review.path_instructions)
     assert "Do not report" not in joined
 
 

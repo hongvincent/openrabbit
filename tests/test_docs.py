@@ -329,8 +329,8 @@ def test_onboarding_install_path_is_runnable_today() -> None:
 
     # An explicit caveat that the package is not yet published (so a reader does
     # not paste a uvx/pipx command that fails with 'No solution found').
-    assert "unpublished" in low or "not yet published" in low or (
-        "not published" in low
+    assert (
+        "unpublished" in low or "not yet published" in low or ("not published" in low)
     ), "onboarding.md must flag that openrabbit is not yet published on PyPI"
 
     # The primary runnable path is a clone + uv flow against the source tree.
@@ -586,8 +586,10 @@ def test_tuning_guide_documents_confirmed_nova2_reasoning_shape() -> None:
     assert "reasoningconfig" in low, "tuning-guide.md must show the reasoningConfig key"
     # The confirmed enabled-type + maxReasoningEffort shape, tolerant of quoting.
     flat = re.sub(r"\s+", "", low)
-    assert '"type":"enabled"' in flat or "type:enabled" in flat or (
-        '"type"' in flat and '"enabled"' in flat
+    assert (
+        '"type":"enabled"' in flat
+        or "type:enabled" in flat
+        or ('"type"' in flat and '"enabled"' in flat)
     ), "tuning-guide.md must show reasoningConfig type: enabled"
     assert "maxreasoningeffort" in low, (
         "tuning-guide.md must document maxReasoningEffort"
@@ -713,8 +715,11 @@ def test_readme_links_tuning_guide() -> None:
     assert "tuning-guide.md" in low or "docs/tuning-guide" in low, (
         "README must link docs/tuning-guide.md"
     )
-    assert "reasoning" in low and ("tunable" in low or "tune" in low or "per role" in low
-                                   or "per-role" in low or "per lens" in low
-                                   or "per-lens" in low), (
-        "README must mention reasoning effort is tunable per role/lens"
-    )
+    assert "reasoning" in low and (
+        "tunable" in low
+        or "tune" in low
+        or "per role" in low
+        or "per-role" in low
+        or "per lens" in low
+        or "per-lens" in low
+    ), "README must mention reasoning effort is tunable per role/lens"
