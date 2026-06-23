@@ -63,12 +63,13 @@ runs:
       with:
         python-version: ${{ inputs.python_version }}
 
-    - name: Install openrabbit
-      shell: bash
-      # Runtime deps only (the `openrabbit` console script + base deps). Dev
-      # extras (pytest/coverage) are for CI test jobs, not the hardened review
-      # runner — keeping them out trims install time and supply-chain surface.
-      run: uv sync
+    # NB: openrabbit is installed at RUN TIME via `uv run --with git+...` (see the
+    # review step). We deliberately do NOT `uv sync` here: this runner has the
+    # REVIEWED repo checked out, which may be Node/Go/etc. with no Python
+    # pyproject.toml — `uv sync` would error or sync the wrong project, and the
+    # `openrabbit` console script would never be on PATH. The `<OWNER>/<PINNED_SHA>`
+    # tokens in the review step are DELIBERATE placeholders the onboarding owner
+    # replaces (Dependabot bumps the pin).
 
     # Keyless Bedrock auth via OIDC -> STS. No static AWS secrets.
     - name: Configure AWS credentials (OIDC)
@@ -78,12 +79,37 @@ runs:
         aws-region: ${{ inputs.aws_region }}
         role-session-name: openrabbit-review-${{ github.run_id }}
 
+    # GPT-5.5 verifier auth. `configure-aws-credentials` above yields raw STS
+    # creds, but the OpenAI-compatible Bedrock endpoint (GPT-5.5) authenticates
+    # with a short-lived BEARER token, not SigV4. Derive that token from the STS
+    # creds already in the environment and export it (masked) to later steps via
+    # $GITHUB_ENV. Minted UNCONDITIONALLY: the shipped default .openrabbit.yaml
+    # configures an openai.* verifier, and an extra token on a config without one
+    # is harmless (the verifier provider simply never reads it). Region-scoped to
+    # the verifier's region.
+    - name: Mint Bedrock bearer token (GPT-5.5 verifier)
+      shell: bash
+      env:
+        OR_AWS_REGION: ${{ inputs.aws_region }}
+      run: |
+        python3 -m pip install --quiet --disable-pip-version-check "aws-bedrock-token-generator==1.1.0"
+        TOKEN=$(python3 -c "import os; from aws_bedrock_token_generator import provide_token; print(provide_token(region=os.environ['OR_AWS_REGION']))")
+        echo "::add-mask::$TOKEN"
+        echo "AWS_BEARER_TOKEN_BEDROCK=$TOKEN" >> "$GITHUB_ENV"
+        echo "Minted short-lived Bedrock bearer token (masked), region $OR_AWS_REGION"
+
     - name: Run openrabbit review
       shell: bash
       # GitHub-hardening: never inline ${{ }} into a run script. Pass every value
       # through env: and reference it as a QUOTED shell var so a future caller
       # that wires free-text into config/commit cannot inject commands (the
       # runner holds the OIDC/Bedrock role — runner RCE would be material).
+      #
+      # `uv run --with git+...openrabbit@<PINNED_SHA>` installs openrabbit ITSELF
+      # (independent of the reviewed repo) into an ephemeral env and runs its
+      # console script. Replace <OWNER>/<PINNED_SHA> with your org + the vetted
+      # release SHA (Dependabot keeps it current). AWS_BEARER_TOKEN_BEDROCK is
+      # inherited from $GITHUB_ENV (minted above) for the GPT-5.5 verifier.
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
         OR_REPO: ${{ github.repository }}
@@ -91,9 +117,12 @@ runs:
         OR_COMMIT: ${{ inputs.commit }}
         OR_CONFIG: ${{ inputs.config }}
       run: >-
-        uv run openrabbit review
+        uv run
+        --with git+https://github.com/<OWNER>/openrabbit@<PINNED_SHA>
+        openrabbit review
         --repo "$OR_REPO"
         --pr "$OR_PR"
         --commit "$OR_COMMIT"
         --config "$OR_CONFIG"
+        --bot-login "github-actions[bot]"
         --post

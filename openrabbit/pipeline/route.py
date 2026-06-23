@@ -22,6 +22,12 @@ from openrabbit.pipeline.gate import is_ignorable_file
 _DIFF_GIT_RE = re.compile(r"^diff --git a/(?P<a>.+?) b/(?P<b>.+)$")
 # Hunk header: "@@ -l,s +l,s @@ optional".
 _HUNK_RE = re.compile(r"^@@ .* @@")
+# Hunk header with capturable ranges: "@@ -old_start[,old_count] +new_start[,new_count] @@".
+# The counts are optional (git omits ",1"); a missing count defaults to 1.
+_HUNK_RANGE_RE = re.compile(
+    r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))?"
+    r" \+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@"
+)
 
 # Path-classification signals.
 _DOC_SUFFIXES = (".md", ".mdx", ".rst", ".txt", ".adoc")
@@ -59,10 +65,22 @@ DEFAULT_MODEL_ROLE = "finder"
 
 @dataclass(frozen=True)
 class Hunk:
-    """One ``@@ ... @@`` hunk of a file's diff."""
+    """One ``@@ ... @@`` hunk of a file's diff.
+
+    ``old_start``/``old_count`` and ``new_start``/``new_count`` are parsed from
+    the ``@@ -a,b +c,d @@`` header so the exact LEFT (old) / RIGHT (new) line
+    ranges this hunk covers are known. They power
+    :func:`valid_anchor_positions`, which the GitHub adapter uses to drop or
+    clamp model-hallucinated comment positions BEFORE posting (a single
+    out-of-diff position 422s the whole batched review).
+    """
 
     header: str
     text: str  # the hunk header + body lines
+    old_start: int = 0
+    old_count: int = 0
+    new_start: int = 0
+    new_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -202,6 +220,23 @@ def _parse_file_sections(diff: str) -> list[tuple[str, list[str]]]:
     return sections
 
 
+def _parse_hunk_ranges(header: str) -> tuple[int, int, int, int]:
+    """Parse ``@@ -a,b +c,d @@`` into ``(old_start, old_count, new_start, new_count)``.
+
+    A missing count (git omits the ``,1`` for single-line ranges) defaults to 1.
+    A non-conforming header yields all zeros so it simply contributes no valid
+    anchor positions (fail-closed: better to drop a comment than to 422).
+    """
+    m = _HUNK_RANGE_RE.match(header)
+    if not m:
+        return (0, 0, 0, 0)
+    old_start = int(m.group("old_start"))
+    old_count = int(m.group("old_count")) if m.group("old_count") is not None else 1
+    new_start = int(m.group("new_start"))
+    new_count = int(m.group("new_count")) if m.group("new_count") is not None else 1
+    return (old_start, old_count, new_start, new_count)
+
+
 def _parse_hunks(lines: list[str]) -> list[Hunk]:
     hunks: list[Hunk] = []
     header: Optional[str] = None
@@ -210,7 +245,17 @@ def _parse_hunks(lines: list[str]) -> list[Hunk]:
     def flush() -> None:
         if header is not None:
             text = "\n".join([header, *body])
-            hunks.append(Hunk(header=header, text=text))
+            old_start, old_count, new_start, new_count = _parse_hunk_ranges(header)
+            hunks.append(
+                Hunk(
+                    header=header,
+                    text=text,
+                    old_start=old_start,
+                    old_count=old_count,
+                    new_start=new_start,
+                    new_count=new_count,
+                )
+            )
 
     for line in lines:
         if _HUNK_RE.match(line):
@@ -221,6 +266,52 @@ def _parse_hunks(lines: list[str]) -> list[Hunk]:
             body.append(line)
     flush()
     return hunks
+
+
+# --------------------------------------------------------------------------- #
+# valid comment-anchor positions (pure) — guards against out-of-diff 422       #
+# --------------------------------------------------------------------------- #
+def valid_anchor_positions(file_plan: FilePlan) -> set[tuple[str, int]]:
+    """Return the ``{(side, line)}`` set a review comment may legally anchor on.
+
+    Walks each hunk body using the parsed ``@@`` ranges. GitHub only accepts a
+    review comment on a line that is part of the diff:
+
+    * ``RIGHT`` (new side): added (``+``) and context (`` ``) lines.
+    * ``LEFT`` (old side): removed (``-``) and context (`` ``) lines.
+
+    Lines outside every hunk (e.g. a hallucinated line number) are absent, so
+    the adapter can drop or clamp them before the single createReview POST.
+    """
+    positions: set[tuple[str, int]] = set()
+    for hunk in file_plan.hunks:
+        if hunk.new_start == 0 and hunk.old_start == 0:
+            # Unparseable header → contributes nothing (fail-closed).
+            continue
+        old_line = hunk.old_start
+        new_line = hunk.new_start
+        # Skip the header line itself; iterate the body lines only.
+        for raw in hunk.text.split("\n")[1:]:
+            if raw.startswith("+"):
+                positions.add(("RIGHT", new_line))
+                new_line += 1
+            elif raw.startswith("-"):
+                positions.add(("LEFT", old_line))
+                old_line += 1
+            elif raw.startswith("\\"):
+                # "\ No newline at end of file" — not a real line, skip.
+                continue
+            else:  # context line ('' or ' ' prefix) advances both sides.
+                positions.add(("RIGHT", new_line))
+                positions.add(("LEFT", old_line))
+                old_line += 1
+                new_line += 1
+    return positions
+
+
+def valid_positions_by_file(plan: RoutePlan) -> dict[str, set[tuple[str, int]]]:
+    """Map each changed file path to its valid ``{(side, line)}`` anchor set."""
+    return {fp.path: valid_anchor_positions(fp) for fp in plan.files}
 
 
 def route_diff(diff: str, *, lenses: list[str]) -> RoutePlan:

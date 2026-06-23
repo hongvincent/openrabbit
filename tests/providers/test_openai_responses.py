@@ -207,14 +207,19 @@ def test_bearer_token_from_aws_env(monkeypatch):
     assert rec.headers["Authorization"] == "Bearer aws-token"
 
 
-def test_bearer_token_falls_back_to_openai_api_key(monkeypatch):
+def test_openai_api_key_is_not_used_as_bearer(monkeypatch):
+    """OPENAI_API_KEY must NOT be accepted: this is the AWS Bedrock mantle
+    endpoint, not api.openai.com. Silently falling back to an OpenAI key would
+    ship that secret to AWS and mask a missing AWS token. Fail fast instead."""
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "openai-token")
     adapter = OpenAIResponsesAdapter()
     rec = _Recorder(_text_payload())
     _install_fake_httpx(monkeypatch, rec)
-    adapter.complete("sys", [Message("user", "hi")], None, 100, None)
-    assert rec.headers["Authorization"] == "Bearer openai-token"
+    with pytest.raises(ProviderError):
+        adapter.complete("sys", [Message("user", "hi")], None, 100, None)
+    # No request must have been sent with the OpenAI key.
+    assert rec.headers is None
 
 
 # --------------------------------------------------------------------------- #
@@ -574,6 +579,11 @@ def test_http_error_detail_extracted_from_response_json(bearer_env, monkeypatch)
     """A 4xx with a structured error body surfaces the API's message."""
     import httpx
 
+    # 429 is retryable; neutralize backoff so the test stays fast/deterministic.
+    monkeypatch.setattr(
+        "openrabbit.providers.openai_responses.time.sleep", lambda s: None
+    )
+
     class _ErrResp:
         status_code = 429
         text = '{"error":{"message":"rate limited"}}'
@@ -654,6 +664,11 @@ def test_http_error_detail_falls_back_to_text(bearer_env, monkeypatch):
     """When the error body has no error.message, fall back to raw text."""
     import httpx
 
+    # 500 is retryable; neutralize backoff so the test stays fast/deterministic.
+    monkeypatch.setattr(
+        "openrabbit.providers.openai_responses.time.sleep", lambda s: None
+    )
+
     class _ErrResp:
         status_code = 500
         text = "internal server error"
@@ -709,14 +724,30 @@ def test_missing_usage_block_yields_zero_usage(bearer_env, monkeypatch):
     assert res.usage.cache_read == 0
 
 
-def test_incomplete_without_max_tokens_reason_is_length(bearer_env, monkeypatch):
+def test_incomplete_unknown_reason_is_length(bearer_env, monkeypatch):
+    """An unknown/future incomplete reason still maps to LENGTH (truncation)."""
+    payload = _text_payload(finish="incomplete")
+    payload["incomplete_details"] = {"reason": "some_future_reason"}
+    adapter = OpenAIResponsesAdapter()
+    rec = _Recorder(payload)
+    _install_fake_httpx(monkeypatch, rec)
+    res = adapter.complete("s", [Message("user", "x")], None, 100, None)
+    assert res.finish_reason is FinishReason.LENGTH
+
+
+def test_incomplete_content_filter_is_not_length(bearer_env, monkeypatch):
+    """A content-filter safety stop must NOT be mislabeled as LENGTH truncation;
+    it is terminal (STOP), and the precise reason stays on the raw payload."""
     payload = _text_payload(finish="incomplete")
     payload["incomplete_details"] = {"reason": "content_filter"}
     adapter = OpenAIResponsesAdapter()
     rec = _Recorder(payload)
     _install_fake_httpx(monkeypatch, rec)
     res = adapter.complete("s", [Message("user", "x")], None, 100, None)
-    assert res.finish_reason is FinishReason.LENGTH
+    assert res.finish_reason is not FinishReason.LENGTH
+    assert res.finish_reason is FinishReason.STOP
+    # The exact cause is preserved for callers that need to distinguish it.
+    assert res.raw["incomplete_details"]["reason"] == "content_filter"
 
 
 def test_transport_error_wrapped_as_provider_error(bearer_env, monkeypatch):
