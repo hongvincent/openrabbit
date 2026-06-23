@@ -51,7 +51,9 @@ class ModelPrice:
 #: (the common Bedrock/Anthropic caching economics). Override-friendly: callers
 #: can pass their own :class:`ModelPrice` to :func:`estimate_cost`.
 PRICE_TABLE: dict[str, ModelPrice] = {
-    # Finder (broad, report-all) — cheap high-recall first pass.
+    # DEPRECATED legacy Gen-1 finder: 5K output cap, no reasoning, no global
+    # profile, EOL signal — prefer amazon.nova-2-lite-v1:0; priced here only for
+    # backward-compat so existing configs still get a cost estimate.
     "amazon.nova-pro-v1:0": ModelPrice(
         input_per_mtok=0.80,
         output_per_mtok=3.20,
@@ -88,8 +90,10 @@ PRICE_TABLE: dict[str, ModelPrice] = {
         cache_write_per_mtok=2.75,
     ),
     # nova-2-lite — current default triage/finder (Converse, global. profile).
-    # cache-read rate is uncertain: sources conflict ($0.075 vs $0.030); the
-    # $0.075 value here should be verified empirically before locking budgets.
+    # cache-read rate: AWS's standard Nova prompt-cache discount is ~10% of
+    # input ($0.03/MTok), so $0.03 is the AWS-documented-standard rate. The
+    # $0.075 used here is a deliberately conservative figure — FLAG for
+    # empirical verification before locking budgets.
     "amazon.nova-2-lite-v1:0": ModelPrice(
         input_per_mtok=0.30,
         output_per_mtok=2.50,

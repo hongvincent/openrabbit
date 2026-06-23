@@ -137,7 +137,8 @@ KNOWN_MODELS: dict[str, ModelInfo] = {
         adapter=ADAPTER_CONVERSE,
         allowed_regions=NOVA_REGIONS,
     ),
-    # Finder / triage — Amazon Nova via Converse (soft region).
+    # DEPRECATED legacy Gen-1: 5K output cap, no reasoning, no global profile,
+    # EOL signal — prefer amazon.nova-2-lite-v1:0; kept for backward-compat.
     "amazon.nova-pro-v1:0": ModelInfo(
         model_id="amazon.nova-pro-v1:0",
         adapter=ADAPTER_CONVERSE,
@@ -165,6 +166,17 @@ KNOWN_MODELS: dict[str, ModelInfo] = {
         allowed_regions=CLAUDE_REGIONS,
     ),
 }
+
+# --------------------------------------------------------------------------- #
+# deprecated models                                                            #
+# --------------------------------------------------------------------------- #
+#: Registered model ids that are still resolvable (backward-compat for existing
+#: configs) but should NOT be assigned to new roles. ``amazon.nova-pro-v1:0`` is
+#: the legacy Gen-1 finder: a hard 5K output cap (vs Nova 2 Lite's 64K), no
+#: reasoning path, no ``global.`` inference profile, higher cost, an Oct-2024
+#: cutoff, no Korean, and an EOL signal — prefer ``amazon.nova-2-lite-v1:0``.
+#: :func:`is_deprecated_model` is profile-aware so callers can warn before a run.
+DEPRECATED_MODELS: frozenset[str] = frozenset({"amazon.nova-pro-v1:0"})
 
 #: Family prefix -> adapter, for resolving *unregistered* (but recognizably
 #: shaped) model ids to an adapter family. Order doesn't matter — prefixes are
@@ -204,6 +216,18 @@ def lookup_model(model: str) -> Optional[ModelInfo]:
     if base != model:
         return KNOWN_MODELS.get(base)
     return None
+
+
+def is_deprecated_model(model: str) -> bool:
+    """Return ``True`` if ``model`` is a deprecated legacy id (profile-aware).
+
+    Resolves a cross-region inference-profile prefix first, so
+    ``global.amazon.nova-pro-v1:0`` is recognized as deprecated just like its
+    bare base id. Unknown / current models return ``False``.
+    """
+    if model in DEPRECATED_MODELS:
+        return True
+    return normalize_model_id(model) in DEPRECATED_MODELS
 
 
 def adapter_for_model(model: str) -> Optional[str]:

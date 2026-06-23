@@ -62,9 +62,24 @@ _INFERENCE_OPT_KEYS: dict[str, str] = {
     "temperature": "temperature",
     "top_p": "topP",
     "topP": "topP",
+    "top_k": "topK",
+    "topK": "topK",
     "stop_sequences": "stopSequences",
     "stopSequences": "stopSequences",
 }
+
+# Nova 2 extended-thinking (reasoning) effort levels accepted via the Converse
+# ``additionalModelRequestFields.reasoningConfig.maxReasoningEffort``. Anything
+# else (absent / None / "none" / "off") means reasoning is DISABLED and no
+# reasoningConfig is injected (the model default ``type: "disabled"``).
+_REASONING_EFFORTS: frozenset[str] = frozenset({"low", "medium", "high"})
+
+# inferenceConfig sampling keys that MUST be omitted when reasoning effort is
+# "high": Nova 2 raises a ValidationException if temperature/topP/topK are sent
+# alongside high-effort reasoning. (low/medium tolerate them.)
+_HIGH_EFFORT_BANNED_INFERENCE_KEYS: frozenset[str] = frozenset(
+    {"temperature", "topP", "topK"}
+)
 
 _CACHE_POINT: dict[str, Any] = {"cachePoint": {"type": "default"}}
 
@@ -189,11 +204,17 @@ class ConverseAdapter(Provider):
         use_cache = cache_prefix is not None
         opts = dict(opts)
         tool_choice = opts.pop("tool_choice", None)
+        # ``reasoning_effort`` is a Converse top-level concern (it maps to
+        # additionalModelRequestFields), never an inferenceConfig key — pop it
+        # out before the inference config is built so it cannot leak through.
+        effort = self._normalize_reasoning_effort(opts.pop("reasoning_effort", None))
 
         request: dict[str, Any] = {
             "modelId": self._model_id,
             "messages": self._build_messages(messages, use_cache=use_cache),
-            "inferenceConfig": self._build_inference_config(max_tokens, opts),
+            "inferenceConfig": self._build_inference_config(
+                max_tokens, opts, effort=effort
+            ),
         }
 
         system_blocks = self._build_system(system, use_cache=use_cache)
@@ -204,7 +225,27 @@ class ConverseAdapter(Provider):
         if tool_config is not None:
             request["toolConfig"] = tool_config
 
+        if effort is not None:
+            request["additionalModelRequestFields"] = {
+                "reasoningConfig": {"type": "enabled", "maxReasoningEffort": effort}
+            }
+
         return request
+
+    @staticmethod
+    def _normalize_reasoning_effort(value: Any) -> Optional[str]:
+        """Map a neutral ``reasoning_effort`` opt to a Nova 2 effort or None.
+
+        ``"low"``/``"medium"``/``"high"`` enable extended thinking; absent /
+        ``None`` / ``"none"`` / ``"off"`` (case-insensitively) mean disabled,
+        returning ``None`` so no ``reasoningConfig`` is injected.
+        """
+        if value is None:
+            return None
+        effort = str(value).strip().lower()
+        if effort in _REASONING_EFFORTS:
+            return effort
+        return None
 
     @staticmethod
     def _build_system(system: str, *, use_cache: bool) -> list[dict[str, Any]]:
@@ -263,12 +304,17 @@ class ConverseAdapter(Provider):
 
     @staticmethod
     def _build_inference_config(
-        max_tokens: int, opts: dict[str, Any]
+        max_tokens: int, opts: dict[str, Any], *, effort: Optional[str] = None
     ) -> dict[str, Any]:
         cfg: dict[str, Any] = {"maxTokens": max_tokens}
+        # When reasoning effort is "high", Nova 2 rejects sampling params
+        # (temperature/topP/topK) with a ValidationException, so drop them.
+        banned = (
+            _HIGH_EFFORT_BANNED_INFERENCE_KEYS if effort == "high" else frozenset()
+        )
         for key, value in opts.items():
             mapped = _INFERENCE_OPT_KEYS.get(key)
-            if mapped is not None:
+            if mapped is not None and mapped not in banned:
                 cfg[mapped] = value
         return cfg
 
@@ -329,6 +375,12 @@ class ConverseAdapter(Provider):
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         for block in blocks:
+            # ``reasoningContent`` blocks (Nova 2 extended thinking) are NOT
+            # user-facing — their text is redacted chain-of-thought billed as
+            # output. Skip them entirely so reasoning never leaks into the
+            # result text; only the normal ``text``/``toolUse`` blocks count.
+            if "reasoningContent" in block:
+                continue
             if "text" in block:
                 text_parts.append(block["text"])
             elif "toolUse" in block:

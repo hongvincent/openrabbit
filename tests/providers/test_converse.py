@@ -306,6 +306,181 @@ def test_inference_config_extra_opts(install_boto3):
 
 
 # --------------------------------------------------------------------------- #
+# Nova 2 extended-thinking (reasoning_effort)                                  #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("effort", ["low", "medium"])
+def test_reasoning_effort_injects_reasoning_config(install_boto3, effort):
+    """reasoning_effort=low/medium injects the exact Nova 2 reasoningConfig shape."""
+    _fake, client = install_boto3(responses=[_text_resp()])
+    from openrabbit.providers.converse import ConverseAdapter
+
+    a = ConverseAdapter(model_id="m", region="r")
+    a.complete(
+        "s",
+        [Message("user", "x")],
+        None,
+        100,
+        None,
+        reasoning_effort=effort,
+    )
+    call = client.calls[0]
+    assert call["additionalModelRequestFields"] == {
+        "reasoningConfig": {"type": "enabled", "maxReasoningEffort": effort}
+    }
+
+
+def test_reasoning_effort_not_leaked_into_inference_config(install_boto3):
+    """reasoning_effort is a Converse top-level field, never an inferenceConfig key."""
+    _fake, client = install_boto3(responses=[_text_resp()])
+    from openrabbit.providers.converse import ConverseAdapter
+
+    a = ConverseAdapter(model_id="m", region="r")
+    a.complete("s", [Message("user", "x")], None, 100, None, reasoning_effort="low")
+    cfg = client.calls[0]["inferenceConfig"]
+    assert "reasoning_effort" not in cfg
+    assert "reasoningConfig" not in cfg
+    assert "maxReasoningEffort" not in cfg
+
+
+@pytest.mark.parametrize("disabled", [None, "none", "off"])
+def test_reasoning_effort_disabled_values_omit_reasoning_config(
+    install_boto3, disabled
+):
+    """Absent/None/'none'/'off' => reasoning disabled (no additionalModelRequestFields)."""
+    _fake, client = install_boto3(responses=[_text_resp()])
+    from openrabbit.providers.converse import ConverseAdapter
+
+    a = ConverseAdapter(model_id="m", region="r")
+    a.complete(
+        "s", [Message("user", "x")], None, 100, None, reasoning_effort=disabled
+    )
+    assert "additionalModelRequestFields" not in client.calls[0]
+
+
+def test_reasoning_effort_absent_omits_reasoning_config(install_boto3):
+    """No reasoning_effort opt at all => no additionalModelRequestFields."""
+    _fake, client = install_boto3(responses=[_text_resp()])
+    from openrabbit.providers.converse import ConverseAdapter
+
+    a = ConverseAdapter(model_id="m", region="r")
+    a.complete("s", [Message("user", "x")], None, 100, None)
+    assert "additionalModelRequestFields" not in client.calls[0]
+
+
+def test_reasoning_effort_high_omits_temperature_top_p_top_k(install_boto3):
+    """High effort MUST omit temperature/topP/topK (else Nova 2 ValidationException)."""
+    _fake, client = install_boto3(responses=[_text_resp()])
+    from openrabbit.providers.converse import ConverseAdapter
+
+    a = ConverseAdapter(model_id="m", region="r")
+    a.complete(
+        "s",
+        [Message("user", "x")],
+        None,
+        100,
+        None,
+        reasoning_effort="high",
+        temperature=0.2,
+        top_p=0.9,
+        top_k=40,
+    )
+    call = client.calls[0]
+    assert call["additionalModelRequestFields"] == {
+        "reasoningConfig": {"type": "enabled", "maxReasoningEffort": "high"}
+    }
+    cfg = call["inferenceConfig"]
+    assert "temperature" not in cfg
+    assert "topP" not in cfg
+    assert "topK" not in cfg
+    # maxTokens is unaffected by the high-effort omission.
+    assert cfg["maxTokens"] == 100
+
+
+def test_reasoning_effort_low_keeps_temperature_and_top_p(install_boto3):
+    """Only HIGH omits sampling params; low/medium keep temperature/topP as usual."""
+    _fake, client = install_boto3(responses=[_text_resp()])
+    from openrabbit.providers.converse import ConverseAdapter
+
+    a = ConverseAdapter(model_id="m", region="r")
+    a.complete(
+        "s",
+        [Message("user", "x")],
+        None,
+        100,
+        None,
+        reasoning_effort="low",
+        temperature=0.0,
+        top_p=0.9,
+    )
+    cfg = client.calls[0]["inferenceConfig"]
+    assert cfg["temperature"] == 0.0
+    assert cfg["topP"] == 0.9
+
+
+def test_reasoning_content_block_not_leaked_into_text(install_boto3):
+    """A reasoningContent block must NOT be concatenated into result.text."""
+    reasoning_block = {
+        "reasoningContent": {
+            "reasoningText": {"text": "[REDACTED] chain of thought", "signature": "s"}
+        }
+    }
+    install_boto3(
+        responses=[
+            _resp(
+                content=[reasoning_block, {"text": "The code looks correct."}],
+                stop_reason="end_turn",
+            )
+        ]
+    )
+    from openrabbit.providers.converse import ConverseAdapter
+
+    a = ConverseAdapter(model_id="m", region="r")
+    res = a.complete("s", [Message("user", "x")], None, 100, None)
+    assert res.text == "The code looks correct."
+    assert "REDACTED" not in res.text
+    assert "chain of thought" not in res.text
+    assert res.finish_reason is FinishReason.STOP
+
+
+def test_reasoning_content_block_with_tool_use(install_boto3):
+    """reasoningContent + toolUse: parse the toolUse, drop the reasoning text."""
+    reasoning_block = {
+        "reasoningContent": {
+            "reasoningText": {"text": "thinking...", "signature": "sig"}
+        }
+    }
+    install_boto3(
+        responses=[
+            _resp(
+                content=[
+                    reasoning_block,
+                    {
+                        "toolUse": {
+                            "toolUseId": "tu-7",
+                            "name": "emit_findings",
+                            "input": {"findings": []},
+                        }
+                    },
+                ],
+                stop_reason="tool_use",
+            )
+        ]
+    )
+    from openrabbit.providers.converse import ConverseAdapter
+
+    tools = [ToolSpec("emit_findings", "emit", {"type": "object"})]
+    a = ConverseAdapter(model_id="m", region="r")
+    res = a.complete(
+        "s", [Message("user", "x")], tools, 100, None, tool_choice="emit_findings"
+    )
+    assert res.text == ""
+    assert len(res.tool_calls) == 1
+    assert res.tool_calls[0].name == "emit_findings"
+    assert res.tool_calls[0].args == {"findings": []}
+    assert res.finish_reason is FinishReason.TOOL_USE
+
+
+# --------------------------------------------------------------------------- #
 # Tool mapping                                                                 #
 # --------------------------------------------------------------------------- #
 def test_tools_mapped_to_tool_config(install_boto3):

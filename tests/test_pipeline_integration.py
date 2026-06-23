@@ -429,6 +429,63 @@ class TestRunLenses:
         content = msg.content if isinstance(msg.content, str) else str(msg.content)
         assert "enclosing-context" not in content
 
+    def test_per_lens_reasoning_effort_reaches_finder_opts(self, config):
+        # The finder must apply reasoning effort PER LENS: a configured
+        # ``reasoning_effort: low`` for the security/correctness lenses has to
+        # flow into the finder provider's complete() call as
+        # opts['reasoning_effort']=='low' (which the Converse adapter maps onto
+        # additionalModelRequestFields.reasoningConfig.maxReasoningEffort).
+        # Lenses with no configured effort stay OFF (no reasoning opt at all).
+        plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness", "security"])
+        pf = next(f for f in plan.files if f.path == "src/api/auth.py")
+        finder = FakeProvider([_emit_findings_result([]), _emit_findings_result([])])
+        run_lenses_mod.run_lenses(
+            finder,
+            pf,
+            lens_prompts={"correctness": "COR", "security": "SEC"},
+            prefix="P",
+            lens_reasoning_effort={"correctness": "low", "security": "low"},
+        )
+        assert len(finder.calls) == 2
+        # Every finder call for a configured lens carries the low-effort opt.
+        for call in finder.calls:
+            assert call.opts.get("reasoning_effort") == "low"
+
+    def test_unconfigured_lens_has_no_reasoning_opt(self, config):
+        # A lens with no entry in lens_reasoning_effort (the OFF case for
+        # style/maintainability/tests) must NOT pass a reasoning_effort opt, so
+        # the Converse adapter leaves reasoning DISABLED (the model default).
+        plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness", "maintainability"])
+        pf = next(f for f in plan.files if f.path == "src/api/auth.py")
+        finder = FakeProvider([_emit_findings_result([]), _emit_findings_result([])])
+        run_lenses_mod.run_lenses(
+            finder,
+            pf,
+            lens_prompts={"correctness": "COR", "maintainability": "MNT"},
+            prefix="P",
+            # only correctness gets low effort; maintainability stays OFF
+            lens_reasoning_effort={"correctness": "low"},
+        )
+        by_lens = {}
+        for call in finder.calls:
+            # the lens name is embedded in the system prompt "--- LENS: <name> ---"
+            for lens in ("correctness", "maintainability"):
+                if f"--- LENS: {lens} ---" in call.system:
+                    by_lens[lens] = call
+        assert by_lens["correctness"].opts.get("reasoning_effort") == "low"
+        assert "reasoning_effort" not in by_lens["maintainability"].opts
+
+    def test_run_lenses_without_effort_map_passes_no_reasoning_opt(self, config):
+        # Backward-compat: callers that omit lens_reasoning_effort entirely
+        # (the orchestrator today) get the prior behavior — no reasoning opt.
+        plan = route_mod.route_diff(SAMPLE_DIFF, lenses=["correctness"])
+        pf = next(f for f in plan.files if f.path == "src/api/auth.py")
+        finder = FakeProvider([_emit_findings_result([])])
+        run_lenses_mod.run_lenses(
+            finder, pf, lens_prompts={"correctness": "COR"}, prefix="P"
+        )
+        assert "reasoning_effort" not in finder.calls[0].opts
+
 
 # --------------------------------------------------------------------------- #
 # verify                                                                       #
@@ -1438,6 +1495,62 @@ class TestRoleOptionsThreaded:
         assert 0.2 in temps, (
             "configured finder temperature:0.2 was dropped — not threaded to "
             f"complete(); recorded inferenceConfig temperatures: {temps!r}"
+        )
+
+    def test_lens_reasoning_effort_reaches_converse_request(self, monkeypatch):
+        # End-to-end activation guard: review() must thread
+        # config.review.lens_reasoning_effort through the orchestrator ->
+        # run_lenses -> finder.complete() -> the Converse request's
+        # additionalModelRequestFields.reasoningConfig.maxReasoningEffort.
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
+        bedrock = _CaptureBedrockClient()
+        monkeypatch.setitem(
+            __import__("sys").modules, "boto3", _CaptureBoto3(bedrock)
+        )
+        _CaptureResponsesRecorder().install(monkeypatch)
+
+        config = load_config(
+            {
+                "version": 1,
+                "review": {
+                    "lenses": ["security"],
+                    "lens_reasoning_effort": {"security": "low"},
+                    "confidence_gate": 0.0,
+                    "verify_min_severity": "low",
+                },
+                "model_roles": {
+                    "finder": {
+                        "model": "global.amazon.nova-2-lite-v1:0",
+                        "region": "ap-northeast-2",
+                    },
+                    "verifier": {
+                        "model": "openai.gpt-5.4",
+                        "region": "us-east-2",
+                    },
+                },
+            }
+        )
+        providers = orch_mod.build_providers(config)
+        pr_context = {
+            "draft": False,
+            "state": "open",
+            "head_sha": "DEADBEEF",
+            "repo": "acme/widgets",
+            "diff": self._DIFF,
+        }
+        orch_mod.review(config, pr_context, providers, emit=False)
+
+        assert bedrock.requests, "finder (Nova) was never called"
+        efforts = [
+            r.get("additionalModelRequestFields", {})
+            .get("reasoningConfig", {})
+            .get("maxReasoningEffort")
+            for r in bedrock.requests
+        ]
+        assert "low" in efforts, (
+            "configured lens_reasoning_effort security:low did not reach the "
+            "Converse request as reasoningConfig.maxReasoningEffort (orchestrator "
+            f"did not forward the effort map); recorded: {efforts!r}"
         )
 
 

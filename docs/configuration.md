@@ -35,9 +35,10 @@ model_roles:                     # role -> { model, region, ...provider opts }
   finder:
     model: global.amazon.nova-2-lite-v1:0
     region: ap-northeast-2
-    # TODO: enable Nova 2 Lite low-effort reasoning once the
-    # additionalModelRequestFields (extended-thinking) shape is confirmed — the
-    # finder ships with NO reasoning_effort until then.
+    # Reasoning OFF by default (safe/cheap). The Nova 2 extended-thinking shape is
+    # now CONFIRMED + live-verified — opt in per the tuning guide by adding:
+    #   reasoning_effort: low   # Converse additionalModelRequestFields →
+    #                           # reasoningConfig {type: enabled, maxReasoningEffort: low}
   verifier:
     model: openai.gpt-5.4
     region: us-east-2
@@ -105,11 +106,38 @@ and `region` are first-class; any other keys (`reasoning_effort`, `store`,
 | `verifier` | cross-family judge; scores + drops below the gate | `openai.gpt-5.4` @ `us-east-2` |
 | `premium` | optional, cost-gated highest-stakes role | `openai.gpt-5.4` (high) @ `us-east-2` (off by default) |
 
-The `finder` ships with **no** `reasoning_effort`: Nova 2 Lite's extended-thinking
-request shape (`additionalModelRequestFields`) is still TBD, so enabling
-low-effort reasoning on the finder is a tracked follow-up (see the `TODO` in the
-reference block above). Both `openai.gpt-5.4` and `openai.gpt-5.5` are supported
-verifier ids — the live-verified default is **gpt-5.4**.
+The `finder` ships with **no** `reasoning_effort` by default (the cheap/safe
+default). Nova 2 Lite's extended-thinking request shape
+(`additionalModelRequestFields` → `reasoningConfig`) is now **CONFIRMED** and
+live-verified, so enabling low-effort reasoning on the finder is a supported,
+documented opt-in rather than a deferred follow-up — see
+[`docs/tuning-guide.md`](tuning-guide.md) for the request shape, the per-lens plan,
+and the cost notes. Crucially, the finder reasoning path uses the **same
+`global.amazon.nova-2-lite-v1:0` profile** the finder already runs on (Seoul) —
+that global profile is **live-verified** to accept `reasoningConfig` and return
+`reasoningContent`, so no `us.*` cross-region profile switch is needed. Both
+`openai.gpt-5.4` and `openai.gpt-5.5` are supported verifier ids — the
+live-verified default is **gpt-5.4**.
+
+### Per-role `reasoning_effort` guidance
+
+`reasoning_effort` is tunable per role (and per lens for the finder). Reasoning is
+billed as **output tokens**, so the defaults keep it OFF on the cheap roles and ON
+where it pays for itself. Full table + the confirmed Nova 2 request shape live in
+[`docs/tuning-guide.md`](tuning-guide.md); the summary:
+
+| Role | Default | Escalation |
+|------|---------|------------|
+| `triage` | **OFF** (temp 0) | — |
+| `finder` | **OFF** for pattern / style lenses | **`low`** for logic / security / correctness / concurrency lenses (Nova 2 `reasoningConfig` `maxReasoningEffort: low`) |
+| `verifier` | **medium** | **high** for security / deep findings |
+| `premium` (off by default) | **high** | **`xhigh`** for the hardest PRs (untested on the mantle endpoint) |
+
+> **Nova Pro (`nova-pro-v1:0`) is deprecated** for new roles — prefer
+> `global.amazon.nova-2-lite-v1:0`. Nova Pro has a hard 5K output cap (vs 64K), no
+> reasoning path, no `global.` profile, higher cost, and an Oct-2024 cutoff; it is
+> kept in the registry/price table for backward-compat only. See the tuning guide
+> for the full rationale.
 
 **Region validation.** Model ids are validated against
 `openrabbit.bedrock_models`:

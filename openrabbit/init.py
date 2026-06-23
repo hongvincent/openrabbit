@@ -374,9 +374,11 @@ model_roles:                   # role -> {{ model, region, ...provider opts }}
   finder:
     model: global.amazon.nova-2-lite-v1:0
     region: ap-northeast-2
-    # TODO: enable Nova 2 Lite low-effort reasoning once the
-    # additionalModelRequestFields (extended-thinking) shape is confirmed in AWS
-    # docs — the finder ships with NO reasoning_effort until then.
+    # Reasoning OFF by default (cheap/safe). The Nova 2 extended-thinking shape is
+    # CONFIRMED + live-verified — opt in for logic/security lenses (see the tuning
+    # guide) by uncommenting the next line (Converse additionalModelRequestFields →
+    # reasoningConfig {{type: enabled, maxReasoningEffort: low}}):
+    # reasoning_effort: low
   verifier:
     model: openai.gpt-5.4
     region: us-east-2

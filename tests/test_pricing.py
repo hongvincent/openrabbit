@@ -127,6 +127,37 @@ class TestCorrectedAndNewPrices:
 
 
 # --------------------------------------------------------------------------- #
+# deprecated legacy model — nova-pro kept in the table for backward-compat      #
+# --------------------------------------------------------------------------- #
+class TestDeprecatedNovaPro:
+    """nova-pro is DEPRECATED (5K output cap, no reasoning path, no global
+    profile, EOL signal) but stays in the price table so existing configs that
+    still reference it keep producing a cost estimate. The preferred finder is
+    nova-2-lite.
+    """
+
+    def test_nova_pro_still_priced_for_backward_compat(self):
+        # Deprecated, but lookup must still resolve a non-None price.
+        price = pricing.lookup_price("amazon.nova-pro-v1:0")
+        assert price is pricing.PRICE_TABLE["amazon.nova-pro-v1:0"]
+        assert price.input_per_mtok > 0
+        assert price.output_per_mtok > 0
+
+    def test_nova_pro_cost_estimate_non_none(self):
+        cost = pricing.estimate_cost_for_model(
+            Usage(input_tokens=1_000_000), "amazon.nova-pro-v1:0"
+        )
+        assert cost is not None
+        assert cost > 0
+
+    def test_nova_2_lite_is_preferred_finder_price(self):
+        # The replacement finder must be priced (it's the default role now).
+        assert pricing.lookup_price("amazon.nova-2-lite-v1:0") is (
+            pricing.PRICE_TABLE["amazon.nova-2-lite-v1:0"]
+        )
+
+
+# --------------------------------------------------------------------------- #
 # price lookup                                                                 #
 # --------------------------------------------------------------------------- #
 class TestPriceLookup:

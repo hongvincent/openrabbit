@@ -192,6 +192,7 @@ def run_lens(
     enclosing_fetcher: EnclosingFetcher = gather_enclosing_context,
     max_tokens: int = DEFAULT_FINDER_MAX_TOKENS,
     cache_prefix: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> list[Finding]:
     """Run ONE lens over one file via the finder provider; return findings.
 
@@ -199,19 +200,29 @@ def run_lens(
     pre-built ``file_message`` is not supplied. The default is the offline-safe
     no-op so unit tests never shell out; production passes a
     :class:`~openrabbit.pipeline.enclosing.GitEnclosingFetcher`.
+
+    ``reasoning_effort`` (``"low"|"medium"|"high"``) is the per-lens finder
+    reasoning level. When set, it is threaded into the provider call as
+    ``opts['reasoning_effort']`` — which the Converse adapter maps onto Nova 2's
+    ``reasoningConfig.maxReasoningEffort``. ``None`` (the default) omits the opt
+    entirely, leaving reasoning DISABLED (the Nova 2 default) so this lens runs
+    a plain non-thinking pass.
     """
     if file_message is None:
         file_message = build_file_message(
             file_plan, enclosing_fetcher=enclosing_fetcher
         )
     system = f"{prefix}\n\n--- LENS: {lens_name} ---\n{lens_prompt}"
+    opts: dict[str, Any] = {"tool_choice": EMIT_FINDINGS_TOOL}
+    if reasoning_effort is not None:
+        opts["reasoning_effort"] = reasoning_effort
     result = finder.complete(
         system,
         [file_message],
         [emit_findings_tool_spec()],
         max_tokens,
         cache_prefix,
-        tool_choice=EMIT_FINDINGS_TOOL,
+        **opts,
     )
     return _parse_emit_findings(result)
 
@@ -225,6 +236,7 @@ def run_lenses(
     enclosing_fetcher: EnclosingFetcher = gather_enclosing_context,
     max_tokens: int = DEFAULT_FINDER_MAX_TOKENS,
     cache_prefix: Optional[str] = None,
+    lens_reasoning_effort: Optional[Mapping[str, str]] = None,
 ) -> list[Finding]:
     """Run every assigned lens over one file; aggregate findings.
 
@@ -236,9 +248,18 @@ def run_lenses(
     shared per-file message that every lens reuses, so the enclosing-context
     block is fetched at most once per file. Production injects a
     :class:`~openrabbit.pipeline.enclosing.GitEnclosingFetcher`.
+
+    ``lens_reasoning_effort`` (``{lens: "low"|"medium"|"high"}``, default
+    ``None``) lets the finder apply reasoning effort PER LENS — e.g. LOW for the
+    correctness/security lenses, OFF (omitted) for style/maintainability/tests.
+    A lens absent from the map runs with reasoning DISABLED. The configured
+    effort flows into the finder call as ``opts['reasoning_effort']``
+    (consumed by the Converse reasoning adapter). Defaulting to ``None`` keeps
+    callers that do not configure per-lens effort byte-for-byte unchanged.
     """
     if not file_plan.lenses:
         return []
+    effort_map: Mapping[str, str] = lens_reasoning_effort or {}
     file_message = build_file_message(file_plan, enclosing_fetcher=enclosing_fetcher)
     findings: list[Finding] = []
     for lens_name in file_plan.lenses:
@@ -255,6 +276,7 @@ def run_lenses(
                 file_message=file_message,
                 max_tokens=max_tokens,
                 cache_prefix=cache_prefix,
+                reasoning_effort=effort_map.get(lens_name),
             )
         )
     return findings
