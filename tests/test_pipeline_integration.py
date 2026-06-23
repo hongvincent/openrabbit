@@ -1200,6 +1200,219 @@ class TestModelFactory:
         with pytest.raises(ValueError):
             orch_mod.model_factory(role)
 
+    def test_role_without_options_returns_bare_adapter(self):
+        """No options -> the bare adapter (the common case stays unwrapped)."""
+        from openrabbit.config import ModelRole
+        from openrabbit.providers.converse import ConverseAdapter
+
+        role = ModelRole(model="amazon.nova-pro-v1:0", region="ap-northeast-2")
+        provider = orch_mod.model_factory(role)
+        assert isinstance(provider, ConverseAdapter)
+
+
+# --------------------------------------------------------------------------- #
+# Per-role model options are THREADED to complete() (finding #1).              #
+#                                                                             #
+# Config sets the verifier's reasoning_effort + the finder's temperature; these #
+# must appear in the ACTUAL request bodies the adapters build — proving the    #
+# user's config is honored, not silently dropped. Driven through                #
+# build_providers() + the real review() spine (no shortcut), with boto3/httpx   #
+# faked so there is no network.                                                 #
+# --------------------------------------------------------------------------- #
+class _CaptureBedrockClient:
+    """In-memory bedrock-runtime client that records every converse() request."""
+
+    def __init__(self):
+        self.requests: list[dict] = []
+
+    def converse(self, **kwargs):
+        self.requests.append(kwargs)
+        return {
+            "output": {"message": {"role": "assistant", "content": [{"text": ""}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
+        }
+
+
+class _CaptureBoto3:
+    def __init__(self, client):
+        self._client = client
+
+    def client(self, service_name, **kwargs):
+        return self._client
+
+
+class _CaptureResponsesRecorder:
+    """Records the Responses-API JSON body the GPT-5.5 adapter POSTs."""
+
+    def __init__(self):
+        self.bodies: list[dict] = []
+
+    def install(self, monkeypatch):
+        import httpx
+
+        recorder = self
+
+        class _Resp:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                # A minimal "no findings / empty verdicts" Responses payload so the
+                # spine completes without raising.
+                return {"id": "r", "status": "completed", "output": [], "usage": {}}
+
+            def raise_for_status(self):
+                return None
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def post(self, url, *, headers=None, json=None, **kwargs):
+                recorder.bodies.append(json)
+                return _Resp()
+
+        monkeypatch.setattr(httpx, "Client", _Client)
+
+
+class TestRoleOptionsThreaded:
+    _DIFF = SAMPLE_DIFF  # exercises a real reviewable file (src/api/auth.py)
+
+    def _config(self):
+        # Verifier carries reasoning_effort: high (a GPT-5.5 knob); finder carries
+        # a Nova temperature. Both are user config that must reach the wire.
+        return load_config(
+            {
+                "version": 1,
+                "review": {
+                    "lenses": ["security"],
+                    # Force the finding through the verifier so its options matter.
+                    "verify_min_severity": "low",
+                    "confidence_gate": 0.0,
+                },
+                "model_roles": {
+                    "finder": {
+                        "model": "amazon.nova-pro-v1:0",
+                        "region": "ap-northeast-2",
+                        "temperature": 0.2,
+                    },
+                    "verifier": {
+                        "model": "openai.gpt-5.5",
+                        "region": "us-east-2",
+                        "reasoning_effort": "high",
+                    },
+                },
+            }
+        )
+
+    def test_verifier_reasoning_effort_reaches_request_body(self, monkeypatch):
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        bedrock = _CaptureBedrockClient()
+        monkeypatch.setitem(
+            __import__("sys").modules, "boto3", _CaptureBoto3(bedrock)
+        )
+        responses = _CaptureResponsesRecorder()
+        responses.install(monkeypatch)
+
+        config = self._config()
+        providers = orch_mod.build_providers(config)  # goes through model_factory
+        pr_context = {
+            "draft": False,
+            "state": "open",
+            "head_sha": "DEADBEEF",
+            "repo": "acme/widgets",
+            "diff": self._DIFF,
+        }
+        # The finder (Nova) emits one HIGH security finding so the verifier (GPT-5.5)
+        # actually runs and we can inspect its request body.
+        bedrock.converse = self._finder_then_emit(bedrock)
+        orch_mod.review(config, pr_context, providers, emit=False)
+
+        # The GPT-5.5 verifier request must carry the configured reasoning effort.
+        assert responses.bodies, "verifier (GPT-5.5) was never called"
+        efforts = [b.get("reasoning", {}).get("effort") for b in responses.bodies]
+        assert "high" in efforts, (
+            "configured verifier reasoning_effort:high was dropped — not threaded "
+            f"to complete(); recorded efforts: {efforts!r}"
+        )
+
+    @staticmethod
+    def _finder_then_emit(bedrock):
+        """Make the Nova client emit one HIGH security finding on its converse()."""
+        finding = {
+            "file": "src/api/auth.py",
+            "startLine": 12,
+            "endLine": 14,
+            "side": "RIGHT",
+            "severity": "high",
+            "category": "security",
+            "confidence": 95,
+            "title": "SQL injection via concatenated token",
+            "body": "User token concatenated into SQL.",
+            "ruleId": "openrabbit/security/sqli",
+        }
+
+        def _converse(**kwargs):
+            bedrock.requests.append(kwargs)
+            return {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "toolUse": {
+                                    "toolUseId": "t1",
+                                    "name": "emit_findings",
+                                    "input": {"findings": [finding]},
+                                }
+                            }
+                        ],
+                    }
+                },
+                "stopReason": "tool_use",
+                "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
+            }
+
+        return _converse
+
+    def test_finder_temperature_reaches_converse_inference_config(self, monkeypatch):
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
+        bedrock = _CaptureBedrockClient()
+        monkeypatch.setitem(
+            __import__("sys").modules, "boto3", _CaptureBoto3(bedrock)
+        )
+        _CaptureResponsesRecorder().install(monkeypatch)
+
+        config = self._config()
+        providers = orch_mod.build_providers(config)
+        pr_context = {
+            "draft": False,
+            "state": "open",
+            "head_sha": "DEADBEEF",
+            "repo": "acme/widgets",
+            "diff": self._DIFF,
+        }
+        orch_mod.review(config, pr_context, providers, emit=False)
+
+        # The Nova finder request's inferenceConfig must carry the temperature the
+        # user configured (Converse maps `temperature` -> inferenceConfig.temperature).
+        assert bedrock.requests, "finder (Nova) was never called"
+        temps = [
+            r.get("inferenceConfig", {}).get("temperature") for r in bedrock.requests
+        ]
+        assert 0.2 in temps, (
+            "configured finder temperature:0.2 was dropped — not threaded to "
+            f"complete(); recorded inferenceConfig temperatures: {temps!r}"
+        )
+
 
 # --------------------------------------------------------------------------- #
 # CLI offline mode                                                             #

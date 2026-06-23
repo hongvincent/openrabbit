@@ -11,21 +11,42 @@ The `gh openrabbit` extension mirrors the `claude /install-github-app` UX. Under
 the hood it calls the pure-Python `openrabbit init`, which **detects** the repo's
 stack and **scaffolds** the onboarding artifacts.
 
-```bash
-# Plain CLI (no gh): detect + scaffold.
-openrabbit init                  # dry-run — print the plan + file contents
-openrabbit init --write          # write the files to disk
-openrabbit init --write --force  # overwrite existing files
+You do **not** need to add openrabbit to your repo's dependencies — onboarding
+resolves openrabbit independently of the target repo (it never reads your repo's
+`pyproject.toml`).
 
-# gh extension (precompiled wrapper) — same flow, plus the guarded gh mutations.
-gh openrabbit init
+```bash
+# Option A — no install at all (recommended): run via uvx, which fetches the
+# published `openrabbit` distribution on demand. Works in any repo, no deps added.
+uvx --from openrabbit openrabbit init                  # dry-run — print the plan
+uvx --from openrabbit openrabbit init --write          # write the files to disk
+uvx --from openrabbit openrabbit init --write --force  # overwrite existing files
+
+# Option B — install the CLI once, then use it everywhere.
+pipx install openrabbit        # (or `uv tool install openrabbit`)
+openrabbit init                # dry-run
+openrabbit init --write        # write the files to disk
+
+# Option C — the gh extension wrapper (same flow + the guarded gh mutations).
+# Install it as a real gh extension, then call it like any gh subcommand:
+gh extension install <OWNER>/openrabbit --pin <SHA>   # ships cli/gh-openrabbit/
+gh openrabbit init                                     # dry-run
+gh openrabbit init --write --apply --role-arn=<arn>    # write + set the secret
 ```
+
+> The `gh openrabbit` wrapper resolves openrabbit in this order, each independent
+> of the repo being onboarded: an installed `openrabbit` binary on `PATH`, then a
+> colocated openrabbit checkout (`OPENRABBIT_HOME` or the extension's own source
+> tree), then `uvx --from openrabbit`. It never falls back to a bare `python -m
+> openrabbit.init` (which would `ModuleNotFoundError` in a repo without
+> openrabbit installed).
 
 `init` produces:
 
 1. **`.openrabbit.yaml`** — stack-aware config (lenses + `model_roles` defaulting
-   to a Nova-Pro finder and a GPT-5.5 verifier; `external_tools` chosen for the
-   detected language).
+   to a Nova-Pro finder and a GPT-5.5 verifier). `external_tools` is scaffolded as
+   a **reserved, not-yet-wired** block (`enabled: []`) — the pipeline does not run
+   those graders yet, so the config never advertises a feature that does not run.
 2. **`.github/workflows/openrabbit.yml`** — a **thin caller** workflow that
    `uses:` the SHA-pinned central reusable workflow, with least-privilege
    `permissions`.

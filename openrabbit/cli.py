@@ -18,6 +18,7 @@ imports them lazily), so importing this module needs zero external deps.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
 from collections.abc import Sequence
@@ -49,6 +50,67 @@ def _load_config_or_default(config_path: Optional[str]) -> Config:
             return load_config(candidate)
     # No config on disk: fall back to a sane default (Config has defaults).
     return load_config({"version": 1})
+
+
+# --------------------------------------------------------------------------- #
+# config-as-policy trust boundary (untrusted PR head)                          #
+# --------------------------------------------------------------------------- #
+def _load_base_config(base_ref: str, repo_root: Optional[Path] = None) -> Optional[Config]:
+    """Load ``.openrabbit.yaml`` from the trusted BASE git ref (best-effort).
+
+    In CI the working tree is the PR HEAD (attacker-controlled for a fork /
+    external PR), so the review POLICY must come from the base ref instead. Reads
+    the config blob via read-only ``git show <base_ref>:<name>`` — no network, no
+    write. Any failure (no base config, not a git repo, parse error) returns
+    ``None`` and the caller falls back to the head config with a warning.
+    """
+    import subprocess
+
+    root = repo_root or Path.cwd()
+    for name in DEFAULT_CONFIG_NAMES:
+        try:
+            proc = subprocess.run(
+                ["git", "show", f"{base_ref}:{name}"],
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):  # pragma: no cover - defensive
+            return None
+        if proc.returncode != 0 or not proc.stdout.strip():
+            continue
+        try:
+            import yaml
+
+            data = yaml.safe_load(proc.stdout) or {}
+            return load_config(data)
+        except Exception:  # pragma: no cover - defensive
+            return None
+    return None
+
+
+def _apply_policy_trust_boundary(head: Config, base: Optional[Config]) -> Config:
+    """Anchor the review POLICY to the trusted BASE config (SPEC 12 trust boundary).
+
+    ``.openrabbit.yaml`` is config-as-policy. A PR head can self-weaken review by
+    raising ``confidence_gate`` (suppressing findings), dropping ``lenses``, or
+    adding ``path_filters`` that exclude the changed file. Those three policy
+    fields are therefore taken from the trusted ``base`` config; everything else
+    (BYO ``model_roles``, telemetry, profile, ...) stays from the head so a fork
+    that lacks model wiring still runs. ``base is None`` (no base config found) is
+    a no-op — the caller warns separately — so this never crashes the run.
+    """
+    if base is None:
+        return head
+    boundary_review = dataclasses.replace(
+        head.review,
+        confidence_gate=base.review.confidence_gate,
+        lenses=list(base.review.lenses),
+        path_filters=list(base.review.path_filters),
+    )
+    return dataclasses.replace(head, review=boundary_review)
 
 
 def _emit_model_role_warnings(config: Config) -> None:
@@ -241,6 +303,33 @@ def _cmd_review_online(
             "error: --repo OWNER/NAME and --pr N are required online", file=sys.stderr
         )
         return 2
+    # Posting a review pins it to a commit; without --commit the old code sent the
+    # literal string "None" as the commit id (GitHub 422 / a mislabeled review).
+    # Require an explicit head SHA for --post so "None" can never reach the adapter.
+    if args.post and not args.commit:
+        print(
+            "error: --post requires --commit <head SHA> (the commit the review is "
+            "pinned to); pass the PR head SHA explicitly.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Trust boundary (SPEC 12): the working tree is the PR HEAD (attacker-controlled
+    # for a fork/external PR), so the review POLICY must be anchored to the trusted
+    # BASE ref. Re-anchor gate/lenses/path_filters from the base config when a base
+    # ref is known (``--base-ref`` or ``GITHUB_BASE_REF``); if the base ref names a
+    # config that cannot be read, warn but keep the head policy (best-effort).
+    base_ref = getattr(args, "base_ref", None) or os.environ.get("GITHUB_BASE_REF")
+    if base_ref:
+        base_config = _load_base_config(base_ref, Path.cwd())
+        if base_config is None:
+            print(
+                f"openrabbit: warning: could not read .openrabbit.yaml from base ref "
+                f"{base_ref!r}; using the PR head config as policy (untrusted)",
+                file=sys.stderr,
+            )
+        else:
+            config = _apply_policy_trust_boundary(config, base_config)
 
     from openrabbit.adapters.github import GitHubAdapter, GitHubRepo
 
@@ -510,10 +599,25 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     Bedrock providers built from ``.openrabbit.yaml`` and is REQUIRED for a real
     false-positive measurement — it is gated on credentials (checklist item 20).
     """
-    from openrabbit.eval.runner import run_eval
+    from openrabbit.eval.runner import LIVE_MODE, run_eval
 
     config = _load_config_or_default(args.config)
     repo = args.repo or "."
+
+    # A fixture run's numbers are scripted (a flagging finder + an always-'match'
+    # judge), so it is a wiring smoke test — NEVER a real scorecard. ``--require-pass``
+    # offline would let such a run be cited as a passing CI gate, so we refuse it
+    # outright. The real gate is reserved strictly for ``--online`` (item 20).
+    if args.require_pass and not args.online:
+        print(
+            "error: --require-pass is only meaningful with --online: the offline "
+            "default runs scripted fixtures (a flagging finder + always-'match' "
+            "judge), so its FP rate is not a real measurement and must never gate "
+            "CI. Run `openrabbit eval --online --require-pass` with Bedrock creds "
+            "(item 20).",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.online:
         # Real FP measurement needs live Bedrock creds (item 20). We never make a
@@ -551,19 +655,34 @@ def _cmd_eval(args: argparse.Namespace) -> int:
             judge_provider=verifier_provider,
             config=config,
             limit=args.limit,
+            mode=LIVE_MODE,
         )
     else:
-        # Offline scripted fixtures: a flagging reviewer + match judge.
+        # Offline scripted fixtures: a flagging reviewer + match judge. ``mode``
+        # stamps the report as a fixture run so the FP rate is withheld
+        # (EvalReport.fp_rate() -> None) and can never be cited as a measurement.
         report = run_eval(
             repo,
             provider=lambda: _EvalFixtureProvider(emit=True),
             config=config,
             limit=args.limit,
+            mode="fixture",
         )
 
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+        payload = report.to_dict()
+        if not args.online:
+            # Human-facing top-level marker alongside the machine-readable
+            # null FP rate the report already emits (scorecard.falsePositiveRate),
+            # so no consumer can read a numeric FP rate off a fixture run.
+            payload["falsePositiveRate"] = "N/A — fixture"
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
+        if not args.online:
+            print(
+                "openrabbit eval — FIXTURE MODE (offline scripted fixtures): the "
+                "FP rate is N/A — not a measurement.",
+            )
         print(report.scorecard.format_pretty())
         print(
             f"\ngolden samples: {report.golden_count}   "
@@ -571,9 +690,12 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         )
         if not args.online:
             print(
-                "(offline scripted fixtures — for a real FP<10% number run "
-                "`openrabbit eval --online` with Bedrock creds; item 20)",
+                "(fixture run: a flagging finder + always-'match' judge — for a "
+                "real FP<10% number run `openrabbit eval --online --require-pass` "
+                "with Bedrock creds; item 20)",
             )
+    # The pass/fail gate is only honored for a live (--online) run; offline
+    # --require-pass already hard-errored above, so a fixture run can never pass.
     return 0 if report.scorecard.passed or not args.require_pass else 1
 
 
@@ -675,6 +797,15 @@ def build_parser() -> argparse.ArgumentParser:
     rev.add_argument("--body", help="PR body")
     rev.add_argument(
         "--bot-login", dest="bot_login", help="bot login for dedup (online)"
+    )
+    rev.add_argument(
+        "--base-ref",
+        dest="base_ref",
+        help=(
+            "trusted base git ref for the review POLICY (online); defaults to "
+            "$GITHUB_BASE_REF. The PR head .openrabbit.yaml can never weaken the "
+            "gate/lenses/path_filters relative to this ref."
+        ),
     )
     rev.add_argument(
         "--post", action="store_true", help="actually post the review (online)"
