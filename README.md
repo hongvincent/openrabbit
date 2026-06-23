@@ -103,9 +103,14 @@ the five lenses, path filters, and `path_instructions` — is in
 | premium (optional, off by default) | `openai.gpt-5.4` (high) | `us-east-2` | highest-stakes PRs |
 
 Nova 2 Lite runs via the `global.` cross-region inference profile (Seoul is
-live-verified on Converse); the finder ships with **no** `reasoning_effort` yet —
-Nova 2's extended-thinking request shape is TBD, so enabling low-effort reasoning
-is a tracked follow-up. GPT-5.4 runs over Bedrock's OpenAI-compatible *mantle*
+live-verified on Converse); the finder ships with **no** `reasoning_effort` by
+default (cheap/safe). **Reasoning effort is tunable per role and per lens** — the
+Nova 2 extended-thinking shape is now confirmed + live-verified, so you can opt the
+finder's logic/security lenses into `low`-effort reasoning, bump the verifier to
+`high` for security findings, and so on. See
+[`docs/tuning-guide.md`](docs/tuning-guide.md) for the per-role decision table, the
+confirmed request shape, cost notes, and prompt-cache limits. GPT-5.4 runs over
+Bedrock's OpenAI-compatible *mantle*
 Responses endpoint, which only exists in `us-east-1` / `us-east-2` — a GPT-5.4
 (or GPT-5.5) role outside those regions is a hard config error. Both
 `openai.gpt-5.4` and `openai.gpt-5.5` are supported verifier ids; the

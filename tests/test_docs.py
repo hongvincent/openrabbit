@@ -38,6 +38,7 @@ USAGE = DOCS_DIR / "usage.md"
 CONFIGURATION = DOCS_DIR / "configuration.md"
 SECURITY = DOCS_DIR / "security.md"
 ONBOARDING = DOCS_DIR / "onboarding.md"
+TUNING_GUIDE = DOCS_DIR / "tuning-guide.md"
 
 SBOM_SCRIPT = REPO_ROOT / "scripts" / "generate_sbom.sh"
 SCORECARD_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "scorecard.yml"
@@ -462,3 +463,165 @@ def test_scorecard_triggers_on_schedule_and_push(scorecard: dict[str, Any]) -> N
     assert isinstance(on, dict), "scorecard.yml `on:` must be a mapping"
     assert "schedule" in on, "scorecard.yml must run on a schedule"
     assert "push" in on, "scorecard.yml must run on branch push"
+
+
+# --------------------------------------------------------------------------- #
+# docs/tuning-guide.md — per-role reasoning_effort + Nova 2 confirmed shape    #
+# --------------------------------------------------------------------------- #
+def _strip_md_emphasis(text: str) -> str:
+    """Drop markdown emphasis markers so `does **not**` matches `does not`."""
+    return text.replace("*", "").replace("`", "")
+
+
+def test_tuning_guide_exists() -> None:
+    assert TUNING_GUIDE.is_file(), "missing docs/tuning-guide.md"
+    assert TUNING_GUIDE.read_text(encoding="utf-8").strip(), (
+        "docs/tuning-guide.md is empty"
+    )
+
+
+def test_tuning_guide_documents_confirmed_nova2_reasoning_shape() -> None:
+    """The guide must carry the CONFIRMED (live-verified) Nova 2 extended-thinking
+    request shape — not a TBD placeholder. The exact load-bearing tokens are the
+    ``additionalModelRequestFields`` ``reasoningConfig`` block with
+    ``type: enabled`` and ``maxReasoningEffort: low|medium|high``."""
+    text = _text(TUNING_GUIDE)
+    low = text.lower()
+    assert "additionalmodelrequestfields" in low, (
+        "tuning-guide.md must name additionalModelRequestFields"
+    )
+    assert "reasoningconfig" in low, "tuning-guide.md must show the reasoningConfig key"
+    # The confirmed enabled-type + maxReasoningEffort shape, tolerant of quoting.
+    flat = re.sub(r"\s+", "", low)
+    assert '"type":"enabled"' in flat or "type:enabled" in flat or (
+        '"type"' in flat and '"enabled"' in flat
+    ), "tuning-guide.md must show reasoningConfig type: enabled"
+    assert "maxreasoningeffort" in low, (
+        "tuning-guide.md must document maxReasoningEffort"
+    )
+    # The three confirmed effort levels.
+    for level in ("low", "medium", "high"):
+        assert level in low, f"tuning-guide.md must list the {level} reasoning effort"
+    # The 'high omits temperature/topP/topK' rule and the 'low maxTokens >= 15000'
+    # rule are load-bearing correctness constraints from the AWS Nova 2 docs.
+    assert "temperature" in low and "topp" in low and "topk" in low, (
+        "tuning-guide.md must state high omits temperature/topP/topK"
+    )
+    assert "15000" in low or "15,000" in low, (
+        "tuning-guide.md must note the low-effort maxTokens >= 15000 recommendation"
+    )
+
+
+def test_tuning_guide_has_per_role_reasoning_table() -> None:
+    """A per-role reasoning_effort decision table covering every role + the
+    confirmed plan (triage OFF, finder OFF default / LOW for logic+security,
+    verifier medium / high for security, premium high)."""
+    text = _text(TUNING_GUIDE)
+    low = text.lower()
+    assert "reasoning_effort" in low or "reasoning effort" in low
+    # It is a markdown table.
+    assert "|" in text and "---" in text, "tuning-guide.md needs a markdown table"
+    for role in ("triage", "finder", "verifier", "premium"):
+        assert role in low, f"tuning-guide.md table must cover the {role} role"
+    # The confirmed plan tokens.
+    assert "off" in low, "tuning-guide.md must note roles that run reasoning OFF"
+    plain = _strip_md_emphasis(low)
+    # finder LOW for logic/security lenses.
+    assert "low" in plain
+    # verifier medium default, high for security.
+    assert "medium" in plain and "high" in plain
+
+
+def test_tuning_guide_documents_gpt54_reasoning_effort() -> None:
+    """GPT-5.4/5.5 reasoning.effort guidance: medium default verifier, high for
+    security, xhigh for the premium/untested role."""
+    low = _lower(TUNING_GUIDE)
+    assert "gpt-5.4" in low or "gpt-5.5" in low, (
+        "tuning-guide.md must give GPT-5.4/5.5 reasoning.effort guidance"
+    )
+    assert "reasoning.effort" in low or "reasoning effort" in low
+    assert "xhigh" in low, "tuning-guide.md must mention the xhigh premium effort"
+
+
+def test_tuning_guide_documents_nova_pro_deprecation() -> None:
+    """The Nova Pro deprecation rationale must be present (prefer nova-2-lite)."""
+    text = _text(TUNING_GUIDE)
+    low = text.lower()
+    assert "nova-pro" in low or "nova pro" in low
+    assert "deprecat" in low, "tuning-guide.md must explain Nova Pro deprecation"
+    assert "nova-2-lite" in low or "nova 2 lite" in low, (
+        "tuning-guide.md must point readers at nova-2-lite instead"
+    )
+
+
+def test_tuning_guide_documents_prompt_cache_notes() -> None:
+    """Prompt-cache notes: 20K cap, 4 checkpoints, 5-min TTL."""
+    low = _lower(TUNING_GUIDE)
+    assert "cache" in low, "tuning-guide.md must include prompt-cache notes"
+    assert "20k" in low or "20,000" in low or "20000" in low, (
+        "tuning-guide.md must note the 20K prompt-cache cap"
+    )
+    assert "4 checkpoint" in low or "four checkpoint" in low, (
+        "tuning-guide.md must note the 4-checkpoint cache limit"
+    )
+    assert "5-min" in low or "5 min" in low or "five-min" in low or "five min" in low, (
+        "tuning-guide.md must note the 5-minute cache TTL"
+    )
+
+
+def test_tuning_guide_documents_cost_notes() -> None:
+    """Rough per-role cost notes so the tuning guide is actionable on spend."""
+    low = _lower(TUNING_GUIDE)
+    assert "cost" in low, "tuning-guide.md must carry per-role cost notes"
+    # Reasoning tokens are billed as output — a load-bearing cost fact.
+    assert "output" in low and ("token" in low or "mtok" in low)
+
+
+# --------------------------------------------------------------------------- #
+# docs/configuration.md — Nova 2 shape is CONFIRMED (no longer TBD)            #
+# --------------------------------------------------------------------------- #
+def test_configuration_no_longer_says_nova2_shape_is_tbd() -> None:
+    """The Nova 2 extended-thinking request shape is CONFIRMED now (live-verified),
+    so configuration.md must NOT still describe it as TBD/TODO. The previous doc
+    said the ``additionalModelRequestFields`` shape was 'still TBD'; that stale
+    claim must be gone so a reader is not told to wait on a confirmed feature."""
+    text = _text(CONFIGURATION)
+    low = text.lower()
+    assert "additionalmodelrequestfields" in low, (
+        "configuration.md must mention the additionalModelRequestFields shape"
+    )
+    # The stale TBD/TODO markers around the extended-thinking shape must be gone.
+    assert "tbd" not in low, "configuration.md must not still say the shape is TBD"
+    assert "todo" not in low, "configuration.md must not carry a TODO about the shape"
+    # And it must point at the confirmed reasoningConfig shape / the tuning guide.
+    assert "reasoningconfig" in low or "tuning-guide.md" in low, (
+        "configuration.md should reference the confirmed reasoningConfig shape "
+        "or link the tuning guide"
+    )
+
+
+def test_configuration_documents_per_role_reasoning_and_nova_pro_deprecation() -> None:
+    """configuration.md must carry the per-role reasoning_effort guidance and the
+    Nova Pro deprecation note (prefer nova-2-lite), plus the live-verified global
+    profile note for the finder reasoning path."""
+    low = _lower(CONFIGURATION)
+    assert "reasoning_effort" in low or "reasoning effort" in low
+    # Nova Pro deprecation.
+    assert "deprecat" in low and ("nova-pro" in low or "nova pro" in low)
+    # Finder reasoning uses the same global profile (live-verified).
+    assert "global" in low and ("live-verified" in low or "live verified" in low)
+
+
+def test_readme_links_tuning_guide() -> None:
+    """README must mention that reasoning effort is tunable per role/lens and link
+    the tuning guide."""
+    text = _text(README)
+    low = text.lower()
+    assert "tuning-guide.md" in low or "docs/tuning-guide" in low, (
+        "README must link docs/tuning-guide.md"
+    )
+    assert "reasoning" in low and ("tunable" in low or "tune" in low or "per role" in low
+                                   or "per-role" in low or "per lens" in low
+                                   or "per-lens" in low), (
+        "README must mention reasoning effort is tunable per role/lens"
+    )

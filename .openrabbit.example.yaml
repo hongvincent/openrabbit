@@ -18,6 +18,17 @@ review:
     - path: "src/api/**"
       instructions: "focus on authn/authz and input validation"
   lenses: [correctness, security, performance, tests, maintainability]
+  # Per-lens finder reasoning effort (Nova 2 extended-thinking). Threaded into
+  # the finder Converse call as additionalModelRequestFields.reasoningConfig =
+  # {type: enabled, maxReasoningEffort: <low|medium|high>} (LIVE-VERIFIED shape
+  # on global.amazon.nova-2-lite-v1:0 in ap-northeast-2). A lens OMITTED below
+  # runs with reasoning DISABLED (Nova 2 default type: "disabled"), i.e. a
+  # plain non-thinking pass. Research-decided: LOW reasoning for the
+  # logic/security lenses; OFF for the cheaper style/test lenses.
+  lens_reasoning_effort:
+    correctness: low           # logic/correctness — LOW effort reasoning
+    security: low              # security — LOW effort reasoning
+    # performance/tests/maintainability OMITTED => reasoning OFF (cheaper pass)
 
 model_roles:                   # role -> { model, region, ...provider opts }
   triage:
@@ -26,8 +37,11 @@ model_roles:                   # role -> { model, region, ...provider opts }
   finder:
     model: global.amazon.nova-2-lite-v1:0
     region: ap-northeast-2
-    # TODO: enable Nova 2 Lite low-effort reasoning once the
-    # additionalModelRequestFields shape is confirmed in AWS docs
+    # Reasoning effort is applied PER LENS via review.lens_reasoning_effort
+    # above (not a single finder-role knob): the finder runs LOW-effort
+    # reasoning only for the lenses that benefit (correctness/security) and a
+    # plain pass for the rest, controlling cost. Nova 2 Lite reasoningConfig is
+    # LIVE-VERIFIED on this same global profile (no us.* profile needed).
   verifier:
     model: openai.gpt-5.4
     region: us-east-2

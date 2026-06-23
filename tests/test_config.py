@@ -218,6 +218,65 @@ def test_invalid_lens_rejected():
         load_config({"review": {"lenses": ["correctness", "bogus"]}})
 
 
+# --------------------------------------------------------------------------- #
+# per-lens reasoning_effort (finder applies effort PER LENS)                   #
+# --------------------------------------------------------------------------- #
+def test_lens_reasoning_effort_defaults_empty():
+    # Omitted -> no per-lens reasoning configured (every lens OFF by default).
+    cfg = load_config({})
+    assert cfg.review.lens_reasoning_effort == {}
+
+
+def test_lens_reasoning_effort_parsed():
+    cfg = load_config(
+        {
+            "review": {
+                "lenses": ["correctness", "security", "maintainability"],
+                "lens_reasoning_effort": {
+                    "correctness": "low",
+                    "security": "low",
+                },
+            }
+        }
+    )
+    assert cfg.review.lens_reasoning_effort == {
+        "correctness": "low",
+        "security": "low",
+    }
+    # maintainability is intentionally absent -> reasoning stays OFF for it.
+    assert "maintainability" not in cfg.review.lens_reasoning_effort
+
+
+def test_lens_reasoning_effort_unknown_lens_rejected():
+    with pytest.raises(ConfigError):
+        load_config(
+            {"review": {"lens_reasoning_effort": {"bogus": "low"}}}
+        )
+
+
+def test_lens_reasoning_effort_invalid_value_rejected():
+    with pytest.raises(ConfigError):
+        load_config(
+            {"review": {"lens_reasoning_effort": {"correctness": "extreme"}}}
+        )
+
+
+def test_lens_reasoning_effort_must_be_mapping():
+    with pytest.raises(ConfigError):
+        load_config({"review": {"lens_reasoning_effort": ["correctness"]}})
+
+
+def test_packaged_example_ships_per_lens_reasoning_effort():
+    # Research-decided per-lens effort: correctness/security run LOW reasoning;
+    # style/maintainability/tests stay OFF (omitted -> reasoning disabled).
+    cfg = load_config(EXAMPLE)
+    effort = cfg.review.lens_reasoning_effort
+    assert effort.get("correctness") == "low"
+    assert effort.get("security") == "low"
+    assert "maintainability" not in effort
+    assert "tests" not in effort
+
+
 def test_verify_min_severity_default_is_high():
     # By default only HIGH/CRITICAL findings route through the expensive
     # cross-family verifier (SPEC 7.3 cost lever #3).

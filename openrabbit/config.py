@@ -25,6 +25,11 @@ from openrabbit.bedrock_models import Severity, Verdict, validate_model_region
 PROFILES = ("chill", "balanced", "assertive")
 LENSES = ("correctness", "security", "performance", "tests", "maintainability")
 TELEMETRY_MODES = ("opt-in", "opt-out")
+# Per-lens finder reasoning effort (Nova 2 extended-thinking). Maps onto the
+# Converse ``additionalModelRequestFields.reasoningConfig.maxReasoningEffort``.
+# A lens absent from ``review.lens_reasoning_effort`` runs with reasoning OFF
+# (the Nova 2 default ``type: "disabled"``).
+REASONING_EFFORTS = ("low", "medium", "high")
 # Severity vocabulary ordered most→least severe; index = rank (0 = critical).
 # Mirrors openrabbit.findings.SEVERITIES (kept independent here so config has no
 # import-time dependency on the findings contract).
@@ -69,6 +74,13 @@ class ReviewConfig:
     #: Minimum severity routed through the (expensive) cross-family verifier;
     #: less-severe findings take the cheaper finder-confidence path.
     verify_min_severity: str = DEFAULT_VERIFY_MIN_SEVERITY
+    #: Per-lens finder reasoning effort (``{lens: "low"|"medium"|"high"}``). A
+    #: lens omitted here runs with reasoning OFF. ``run_lenses`` threads each
+    #: configured effort into the finder ``complete()`` call as
+    #: ``opts['reasoning_effort']``, which the Converse adapter maps onto
+    #: ``reasoningConfig.maxReasoningEffort`` (research: LOW for
+    #: correctness/security/logic/concurrency lenses, OFF for style/tests).
+    lens_reasoning_effort: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -288,6 +300,10 @@ def _parse_review(raw: Any) -> ReviewConfig:
             f"{SEVERITIES}, got {verify_min_severity!r}"
         )
 
+    lens_reasoning_effort = _parse_lens_reasoning_effort(
+        block.get("lens_reasoning_effort", {}) or {}
+    )
+
     return ReviewConfig(
         profile=profile,
         confidence_gate=float(gate),
@@ -296,7 +312,34 @@ def _parse_review(raw: Any) -> ReviewConfig:
         path_instructions=instructions,
         lenses=list(lenses),
         verify_min_severity=verify_min_severity,
+        lens_reasoning_effort=lens_reasoning_effort,
     )
+
+
+def _parse_lens_reasoning_effort(raw: Any) -> dict[str, str]:
+    """Parse + validate ``review.lens_reasoning_effort`` (``{lens: effort}``).
+
+    Each key must be a known lens and each value one of
+    :data:`REASONING_EFFORTS`. An absent/empty map means every lens runs with
+    reasoning OFF. Unknown lenses or invalid efforts fail fast (a typo here
+    would silently degrade — or inflate the cost of — the finder pass).
+    """
+    if not isinstance(raw, Mapping):
+        raise ConfigError("review.lens_reasoning_effort must be a mapping")
+    out: dict[str, str] = {}
+    for lens, effort in raw.items():
+        if lens not in LENSES:
+            raise ConfigError(
+                "review.lens_reasoning_effort contains unknown lens "
+                f"{lens!r}; allowed: {LENSES}"
+            )
+        if effort not in REASONING_EFFORTS:
+            raise ConfigError(
+                f"review.lens_reasoning_effort[{lens!r}] must be one of "
+                f"{REASONING_EFFORTS}, got {effort!r}"
+            )
+        out[str(lens)] = str(effort)
+    return out
 
 
 def _parse_path_instructions(raw: Any) -> list[PathInstruction]:
