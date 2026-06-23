@@ -198,7 +198,7 @@ jobs:
             base_ref_args+=(--base-ref "origin/$OR_BASE_REF")
           fi
           uv run \
-            --with git+https://github.com/<OWNER>/openrabbit@<PINNED_SHA> \
+            --with git+https://github.com/hongvincent/openrabbit@eb27df197972200758b008d89dffba51db742225 \
             openrabbit review \
             --repo "$OR_REPO" \
             --pr "$OR_PR" \
