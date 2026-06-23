@@ -221,3 +221,203 @@ def test_str_body_request_is_verified_and_handled():
     resp = handle_request(req, secret=secret, deps={"review": spy})
     assert resp.status == 200
     assert len(spy.contexts) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Finding 2: App mode does NOT yet post reviews — it is honestly marked        #
+# not-wired so no one ships it expecting posted reviews.                       #
+# --------------------------------------------------------------------------- #
+def test_app_mode_review_posting_is_marked_not_wired():
+    """App mode must NOT silently pretend it posts reviews.
+
+    The Actions path (reusable workflow / composite action) is the supported,
+    working review path. App mode's webhook handler dispatches to an injected
+    ``deps["review"]`` callback, but openrabbit does not yet ship a callback that
+    fetches the PR diff via an installation token and posts the review. Until that
+    is wired, the module must advertise that honestly via a machine-checkable
+    flag so onboarding code can detect it rather than ship a no-op reviewer.
+    """
+    import openrabbit.app.server as server_mod
+
+    assert hasattr(server_mod, "APP_MODE_REVIEW_WIRED"), (
+        "server must expose APP_MODE_REVIEW_WIRED so callers can detect whether "
+        "App mode ships a real posting review callback"
+    )
+    assert server_mod.APP_MODE_REVIEW_WIRED is False, (
+        "App mode does not yet ship a diff-fetching, review-posting callback; "
+        "the flag must stay False until it genuinely does (use the Actions path)"
+    )
+
+
+def test_app_mode_not_wired_is_documented_in_module_docstring():
+    """The 'not wired — use the Actions path' caveat is in the module docstring.
+
+    A reader skimming the module must not be misled by the mounting examples into
+    believing a posting reviewer ships.
+    """
+    import openrabbit.app.server as server_mod
+
+    doc = (server_mod.__doc__ or "").lower()
+    assert "not" in doc and "wired" in doc, (
+        "module docstring must state App mode is NOT yet wired to post reviews"
+    )
+    assert "actions" in doc, (
+        "module docstring must point users at the working Actions path"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Finding 3: payload-size cap + delivery-id replay defense                     #
+# --------------------------------------------------------------------------- #
+def test_oversized_body_is_rejected_before_review():
+    """A body larger than the cap is rejected (413) and never reviewed/parsed."""
+    from openrabbit.app.server import MAX_BODY_BYTES
+
+    secret = "whsec"
+    spy = _SpyReview()
+    # Build a body just over the cap. It is otherwise valid + correctly signed,
+    # so only the size cap can reject it.
+    payload = _pr_payload("opened")
+    payload["pull_request"]["body"] = "x" * (MAX_BODY_BYTES + 1)
+    body = json.dumps(payload).encode("utf-8")
+    assert len(body) > MAX_BODY_BYTES
+    headers = {
+        "X-GitHub-Event": "pull_request",
+        "X-GitHub-Delivery": "big-1",
+        "X-Hub-Signature-256": _sign(secret, body),
+    }
+    req = Request(method="POST", headers=headers, body=body)
+    resp = handle_request(req, secret=secret, deps={"review": spy})
+    assert resp.status == 413
+    assert spy.contexts == []
+
+
+def test_oversized_body_rejected_before_signature_check():
+    """The size cap rejects BEFORE HMAC is computed over attacker-controlled bytes.
+
+    A huge unsigned body must not force a full HMAC over megabytes of attacker
+    input (cheap DoS). The 413 fires even with no/invalid signature.
+    """
+    from openrabbit.app.server import MAX_BODY_BYTES
+
+    secret = "whsec"
+    spy = _SpyReview()
+    body = b"x" * (MAX_BODY_BYTES + 10)
+    headers = {
+        "X-GitHub-Event": "pull_request",
+        "X-Hub-Signature-256": "sha256=" + "0" * 64,  # invalid on purpose
+    }
+    req = Request(method="POST", headers=headers, body=body)
+    resp = handle_request(req, secret=secret, deps={"review": spy})
+    assert resp.status == 413
+    assert spy.contexts == []
+
+
+def test_body_at_cap_is_accepted():
+    """A body exactly at the cap is allowed (boundary is inclusive)."""
+    from openrabbit.app.server import MAX_BODY_BYTES
+
+    secret = "whsec"
+    spy = _SpyReview()
+    base = _pr_payload("opened")
+    # Pad the (untrusted) body field so the serialized body lands exactly at cap.
+    # Solve for the pad length empirically (the JSON envelope around the padding
+    # is constant once the field is a string), then assert we hit the cap exactly.
+    base["pull_request"]["body"] = ""
+    envelope_len = len(json.dumps(base).encode("utf-8"))
+    pad = MAX_BODY_BYTES - envelope_len
+    assert pad > 0
+    base["pull_request"]["body"] = "x" * pad
+    body = json.dumps(base).encode("utf-8")
+    assert len(body) == MAX_BODY_BYTES
+    headers = {
+        "X-GitHub-Event": "pull_request",
+        "X-GitHub-Delivery": "at-cap",
+        "X-Hub-Signature-256": _sign(secret, body),
+    }
+    req = Request(method="POST", headers=headers, body=body)
+    resp = handle_request(req, secret=secret, deps={"review": spy})
+    assert resp.status == 200
+    assert len(spy.contexts) == 1
+
+
+def test_duplicate_delivery_id_is_ignored_for_replay_defense():
+    """Re-delivering the same X-GitHub-Delivery id does not review twice."""
+    from openrabbit.app.server import DeliveryDedup
+
+    secret = "whsec"
+    spy = _SpyReview()
+    dedup = DeliveryDedup()
+    req = _request(secret, "pull_request", _pr_payload("opened"), delivery="dup-1")
+
+    first = handle_request(req, secret=secret, deps={"review": spy}, dedup=dedup)
+    assert first.status == 200
+    assert len(spy.contexts) == 1
+
+    # Exact same signed delivery, replayed.
+    second = handle_request(req, secret=secret, deps={"review": spy}, dedup=dedup)
+    assert second.status == 200  # acknowledged so GitHub stops retrying
+    assert len(spy.contexts) == 1  # but NOT reviewed again
+    body = json.loads(second.body)
+    assert body.get("duplicate") is True
+
+
+def test_distinct_delivery_ids_each_reviewed():
+    """Different delivery ids are independent — both are reviewed."""
+    from openrabbit.app.server import DeliveryDedup
+
+    secret = "whsec"
+    spy = _SpyReview()
+    dedup = DeliveryDedup()
+    r1 = _request(secret, "pull_request", _pr_payload("opened"), delivery="a")
+    r2 = _request(secret, "pull_request", _pr_payload("synchronize"), delivery="b")
+    handle_request(r1, secret=secret, deps={"review": spy}, dedup=dedup)
+    handle_request(r2, secret=secret, deps={"review": spy}, dedup=dedup)
+    assert len(spy.contexts) == 2
+
+
+def test_dedup_is_bounded():
+    """The dedup set is bounded so a flood of deliveries cannot grow it unbounded."""
+    from openrabbit.app.server import DeliveryDedup
+
+    dedup = DeliveryDedup(max_entries=4)
+    for i in range(100):
+        dedup.seen(f"id-{i}")
+    assert len(dedup) <= 4
+
+
+def test_dedup_only_records_authenticated_deliveries():
+    """A bad-signature delivery id is NOT recorded (so the real, signed retry of
+    that id is still processed once)."""
+    from openrabbit.app.server import DeliveryDedup
+
+    secret = "whsec"
+    spy = _SpyReview()
+    dedup = DeliveryDedup()
+    # Forged delivery: bad signature → 401, must not poison the dedup set.
+    forged = _request(
+        secret, "pull_request", _pr_payload("opened"),
+        sign_with="attacker", delivery="x1",
+    )
+    resp = handle_request(forged, secret=secret, deps={"review": spy}, dedup=dedup)
+    assert resp.status == 401
+    assert dedup.seen("x1") is False  # not recorded by the rejected request
+
+    # The genuine signed delivery with the same id is processed normally.
+    real = _request(secret, "pull_request", _pr_payload("opened"), delivery="x1")
+    # Reset the probe-recorded id so this asserts the request path, not our probe.
+    dedup = DeliveryDedup()
+    ok = handle_request(real, secret=secret, deps={"review": spy}, dedup=dedup)
+    assert ok.status == 200
+    assert len(spy.contexts) == 1
+
+
+def test_dedup_is_optional_backward_compatible():
+    """Omitting the dedup arg keeps the original behavior (no replay tracking)."""
+    secret = "whsec"
+    spy = _SpyReview()
+    req = _request(secret, "pull_request", _pr_payload("opened"), delivery="z")
+    # Same delivery twice with no dedup → reviewed twice (unchanged contract).
+    handle_request(req, secret=secret, deps={"review": spy})
+    handle_request(req, secret=secret, deps={"review": spy})
+    assert len(spy.contexts) == 2

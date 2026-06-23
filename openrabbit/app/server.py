@@ -6,11 +6,28 @@ the HMAC signature, parses the event, dispatches via
 status. Because it is just a function over plain dataclasses, the whole App is
 unit-testable with **no web framework and no running server**.
 
+App mode is NOT YET WIRED to post reviews — use the Actions path
+----------------------------------------------------------------
+The supported, working review path is **GitHub Actions** (the reusable workflow
+``.github/workflows/reusable-workflow.yml`` / composite ``actions/action.yml``).
+This webhook handler routes a verified ``pull_request`` event to an *injected*
+``deps["review"]`` callback, but openrabbit does **not** yet ship a callback that
+(1) fetches the PR diff via an installation token, (2) runs
+``orchestrator.review(..., emit=False)``, and (3) emits the review through a
+:class:`openrabbit.adapters.github.GitHubAdapter` built from that installation
+token + bot login. The flag :data:`APP_MODE_REVIEW_WIRED` is therefore ``False``.
+Do not deploy App mode expecting posted reviews until a real callback is wired
+and that flag flips to ``True``; until then, onboard via the Actions path.
+
 Status mapping
 --------------
 * non-``POST``                         -> ``405``
+* body larger than :data:`MAX_BODY_BYTES` -> ``413`` (checked FIRST, before any
+  HMAC is computed over attacker-controlled megabytes — cheap-DoS defense)
 * missing/invalid signature            -> ``401`` (checked BEFORE parsing —
   untrusted bytes are never JSON-parsed until authenticated)
+* duplicate ``X-GitHub-Delivery`` id   -> ``200`` (acknowledged, NOT re-reviewed;
+  replay defense — only when a :class:`DeliveryDedup` is supplied)
 * missing ``X-GitHub-Event`` header    -> ``400``
 * unparseable JSON body                -> ``400``
 * event ignored (non-PR / non-review)  -> ``204``
@@ -53,15 +70,65 @@ config + providers (and, for the App, an installation-token-backed GitHub client
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 from openrabbit.app.webhook import handle_event, verify_signature
 
 _SIG_HEADER = "x-hub-signature-256"
 _EVENT_HEADER = "x-github-event"
+_DELIVERY_HEADER = "x-github-delivery"
 _JSON_CT = {"Content-Type": "application/json"}
+
+#: App mode does NOT yet ship a diff-fetching, review-posting callback. See the
+#: module docstring: the Actions path is the supported review path. Flip this to
+#: ``True`` only when a real App-mode review callback is wired end to end.
+APP_MODE_REVIEW_WIRED = False
+
+#: Hard cap on the webhook request body. GitHub's own webhook payloads are capped
+#: at 25 MiB; we accept comfortably more than any real ``pull_request`` payload
+#: while refusing a body large enough to be a cheap memory/CPU DoS. Checked
+#: BEFORE the HMAC so we never hash attacker-controlled megabytes.
+MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MiB
+
+#: Default number of recently-seen delivery ids a :class:`DeliveryDedup` retains.
+_DEFAULT_DEDUP_ENTRIES = 4096
+
+
+class DeliveryDedup:
+    """Bounded in-memory set of processed ``X-GitHub-Delivery`` ids (replay guard).
+
+    GitHub retries deliveries and an attacker who captures one signed delivery can
+    replay it. Recording each *authenticated* delivery id lets the handler ack a
+    replay (so GitHub stops retrying) without reviewing the same PR event twice.
+
+    The set is **bounded** (FIFO eviction of the oldest ids) so a flood of
+    distinct deliveries cannot grow memory without limit. It is process-local and
+    not shared across replicas — adequate as a best-effort guard for a single App
+    process; a multi-replica deployment would back this with a shared store.
+    """
+
+    def __init__(self, *, max_entries: int = _DEFAULT_DEDUP_ENTRIES) -> None:
+        self._max = max(1, int(max_entries))
+        self._ids: OrderedDict[str, None] = OrderedDict()
+
+    def seen(self, delivery_id: str) -> bool:
+        """Return ``True`` if ``delivery_id`` was already recorded (a replay)."""
+        return delivery_id in self._ids
+
+    def record(self, delivery_id: str) -> None:
+        """Record ``delivery_id`` as processed, evicting the oldest if at capacity."""
+        if delivery_id in self._ids:
+            self._ids.move_to_end(delivery_id)
+            return
+        self._ids[delivery_id] = None
+        while len(self._ids) > self._max:
+            self._ids.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._ids)
 
 
 @dataclass(frozen=True)
@@ -100,20 +167,42 @@ class Response:
 
 
 def handle_request(
-    request: Request, *, secret: str, deps: Mapping[str, Any]
+    request: Request,
+    *,
+    secret: str,
+    deps: Mapping[str, Any],
+    dedup: Optional[DeliveryDedup] = None,
 ) -> Response:
     """Verify, parse, route, and respond — a pure ``Request -> Response``.
 
     See the module docstring for the full status mapping. Signature verification
     happens **before** the untrusted body is JSON-parsed, so unauthenticated
     bytes are never interpreted.
+
+    ``dedup`` (optional): a :class:`DeliveryDedup` enabling replay defense via the
+    ``X-GitHub-Delivery`` id. When supplied, a previously-seen delivery is
+    acknowledged (``200``) but NOT re-reviewed, and only *authenticated* (signature
+    + size valid) deliveries are recorded. Omitting it preserves the original
+    behavior (no replay tracking).
     """
     if request.method.upper() != "POST":
         return _json_response(405, {"error": "method not allowed"})
 
-    # 1) Authenticate the raw bytes FIRST (untrusted-input discipline, SPEC 12).
+    # 0) Size cap FIRST — refuse an oversized body before computing the HMAC over
+    # attacker-controlled bytes (a huge unsigned body must not force a megabyte
+    # HMAC; cheap-DoS defense). Checked even before signature verification.
+    if len(request.body_bytes) > MAX_BODY_BYTES:
+        return _json_response(413, {"error": "payload too large"})
+
+    # 1) Authenticate the raw bytes (untrusted-input discipline, SPEC 12).
     if not verify_signature(secret, request.body_bytes, request.header(_SIG_HEADER)):
         return _json_response(401, {"error": "invalid signature"})
+
+    # 1b) Replay defense: if this authenticated delivery id was already processed,
+    # acknowledge (so GitHub stops retrying) without reviewing again.
+    delivery_id = request.header(_DELIVERY_HEADER)
+    if dedup is not None and delivery_id and dedup.seen(delivery_id):
+        return _json_response(200, {"handled": False, "duplicate": True})
 
     # 2) Require the event header (so we know what we're routing).
     event = request.header(_EVENT_HEADER)
@@ -141,6 +230,12 @@ def handle_request(
     if not result.handled:
         # Acknowledge ignored events with 204 (no body) so GitHub stops retrying.
         return Response(status=204, body="", headers=dict(_JSON_CT))
+
+    # Record only a delivery that triggered a real review, so a later replay of
+    # the same id is acked (not re-reviewed). Done after the callback returns so a
+    # callback that raised (→ 500) is NOT recorded and GitHub's retry can succeed.
+    if dedup is not None and delivery_id:
+        dedup.record(delivery_id)
 
     return _json_response(
         200,

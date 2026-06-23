@@ -33,7 +33,16 @@ on:
         type: string
         default: ".openrabbit.yaml"
       aws_region:
-        description: "Primary AWS region for OIDC/STS (verifier/model region)."
+        description: "Primary AWS region for OIDC/STS + the Nova model (e.g. ap-northeast-2)."
+        required: false
+        type: string
+        default: "us-east-2"
+      verifier_region:
+        description: >-
+          AWS region for the GPT-5.5 verifier's Bedrock bearer token. GPT-5.5
+          lives ONLY on the bedrock-mantle us-east-1/us-east-2 endpoint, so this
+          is independent of the Nova `aws_region` (a token minted for the Nova
+          region is rejected by the mantle endpoint — 401).
         required: false
         type: string
         default: "us-east-2"
@@ -110,16 +119,23 @@ jobs:
       # steps via $GITHUB_ENV. Minted UNCONDITIONALLY: the shipped default
       # .openrabbit.yaml configures an openai.* verifier, and an extra token on a
       # config without one is harmless (the verifier provider simply never reads
-      # it). The token is region-scoped to the verifier's region.
+      # it).
+      #
+      # CRITICAL — region: the token is minted for `verifier_region` (default
+      # us-east-2), NOT the Nova `aws_region`. GPT-5.5 lives only on the
+      # bedrock-mantle us-east-1/us-east-2 endpoint; `provide_token(region=...)`
+      # bakes the region into the token's SigV4 scope, so a token minted for the
+      # Nova region (e.g. ap-northeast-2 Seoul) is rejected by the mantle
+      # endpoint (401).
       - name: Mint Bedrock bearer token (GPT-5.5 verifier)
         env:
-          OR_AWS_REGION: ${{ inputs.aws_region }}
+          OR_VERIFIER_REGION: ${{ inputs.verifier_region }}
         run: |
           python3 -m pip install --quiet --disable-pip-version-check "aws-bedrock-token-generator==1.1.0"
-          TOKEN=$(python3 -c "import os; from aws_bedrock_token_generator import provide_token; print(provide_token(region=os.environ['OR_AWS_REGION']))")
+          TOKEN=$(python3 -c "import os; from aws_bedrock_token_generator import provide_token; print(provide_token(region=os.environ['OR_VERIFIER_REGION']))")
           echo "::add-mask::$TOKEN"
           echo "AWS_BEARER_TOKEN_BEDROCK=$TOKEN" >> "$GITHUB_ENV"
-          echo "Minted short-lived Bedrock bearer token (masked), region $OR_AWS_REGION"
+          echo "Minted short-lived Bedrock bearer token (masked) for verifier region $OR_VERIFIER_REGION"
 
       - name: Run openrabbit review
         # GitHub-hardening: never inline ${{ }} into a run script. Pass every
