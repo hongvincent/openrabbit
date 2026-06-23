@@ -160,6 +160,39 @@ def test_packaged_example_is_valid():
     assert set(cfg.model_roles)  # example ships model role mappings
 
 
+def test_packaged_example_ships_decided_model_switch():
+    # The decided switch: Nova 2 Lite finder/triage + GPT-5.4 verifier
+    # (replaces nova-pro finder + gpt-5.5 verifier). The example must parse,
+    # validate clean (no hard ERROR -> no raise), and emit no soft warnings
+    # since every model/region pair is LIVE-VERIFIED & on its allow-list.
+    cfg = load_config(EXAMPLE)
+
+    triage = cfg.model_roles["triage"]
+    assert triage.model == "global.amazon.nova-2-lite-v1:0"
+    assert triage.region == "ap-northeast-2"
+
+    finder = cfg.model_roles["finder"]
+    assert finder.model == "global.amazon.nova-2-lite-v1:0"
+    assert finder.region == "ap-northeast-2"
+    # NO reasoning_effort yet (Nova 2 Lite extended-thinking shape unconfirmed).
+    assert "reasoning_effort" not in finder.options
+
+    verifier = cfg.model_roles["verifier"]
+    assert verifier.model == "openai.gpt-5.4"
+    assert verifier.region == "us-east-2"
+    assert verifier.options.get("reasoning_effort") == "medium"
+    assert verifier.options.get("store") is False
+
+    premium = cfg.model_roles["premium"]
+    assert premium.model == "openai.gpt-5.4"
+    assert premium.region == "us-east-2"
+    assert premium.options.get("reasoning_effort") == "high"
+    assert premium.options.get("enabled") is False
+
+    # whole-config validation surfaces no problems at all
+    assert validate_model_roles(cfg) == []
+
+
 def test_missing_file_raises(tmp_path):
     with pytest.raises(ConfigError):
         load_config(tmp_path / "nope.yaml")

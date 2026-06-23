@@ -71,11 +71,37 @@ PRICE_TABLE: dict[str, ModelPrice] = {
         cache_write_per_mtok=0.04375,
     ),
     # Verifier / judge — strongest available, touches few files.
+    # gpt-5.5 is the real Bedrock list rate (was 1.25/10.00 here — a 4x
+    # understatement; corrected 2026-06-23 against the Bedrock pricing page).
     "openai.gpt-5.5": ModelPrice(
-        input_per_mtok=1.25,
-        output_per_mtok=10.00,
-        cache_read_per_mtok=0.125,
-        cache_write_per_mtok=1.25,
+        input_per_mtok=5.50,
+        output_per_mtok=33.00,
+        cache_read_per_mtok=0.55,
+        cache_write_per_mtok=5.50,
+    ),
+    # gpt-5.4 — current default verifier (lower fabrication rate, ~half the
+    # gpt-5.5 cost; see openrabbit-model-choice). Best-effort Bedrock list rate.
+    "openai.gpt-5.4": ModelPrice(
+        input_per_mtok=2.75,
+        output_per_mtok=16.50,
+        cache_read_per_mtok=0.275,
+        cache_write_per_mtok=2.75,
+    ),
+    # nova-2-lite — current default triage/finder (Converse, global. profile).
+    # cache-read rate is uncertain: sources conflict ($0.075 vs $0.030); the
+    # $0.075 value here should be verified empirically before locking budgets.
+    "amazon.nova-2-lite-v1:0": ModelPrice(
+        input_per_mtok=0.30,
+        output_per_mtok=2.50,
+        cache_read_per_mtok=0.075,
+        cache_write_per_mtok=0.30,
+    ),
+    # nova-premier — EOL 2026-09-14 — do not assign to new roles.
+    "amazon.nova-premier-v1:0": ModelPrice(
+        input_per_mtok=2.50,
+        output_per_mtok=12.50,
+        cache_read_per_mtok=0.625,
+        cache_write_per_mtok=2.50,
     ),
     # Premium (optional, cost-gated) — Claude on Bedrock.
     "anthropic.claude-opus-4-6-v1": ModelPrice(

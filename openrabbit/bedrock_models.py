@@ -113,12 +113,29 @@ PROFILE_PREFIXES: tuple[str, ...] = (
 # known-model registry                                                         #
 # --------------------------------------------------------------------------- #
 KNOWN_MODELS: dict[str, ModelInfo] = {
+    # Verifier / judge — GPT-5.4 via mantle Responses (strict region). The
+    # decided default verifier (LIVE-VERIFIED on the bedrock-mantle Responses
+    # endpoint in us-east-2 with a forced STRICT tool + reasoning.effort=medium).
+    "openai.gpt-5.4": ModelInfo(
+        model_id="openai.gpt-5.4",
+        adapter=ADAPTER_RESPONSES,
+        allowed_regions=GPT_REGIONS,
+        region_strict=True,
+    ),
     # Verifier / judge — GPT-5.5 via mantle Responses (strict region).
     "openai.gpt-5.5": ModelInfo(
         model_id="openai.gpt-5.5",
         adapter=ADAPTER_RESPONSES,
         allowed_regions=GPT_REGIONS,
         region_strict=True,
+    ),
+    # Finder / triage — Amazon Nova 2 Lite via Converse (soft region). The
+    # decided default finder/triage (LIVE-VERIFIED on Converse in ap-northeast-2
+    # via the "global." inference profile — global.amazon.nova-2-lite-v1:0).
+    "amazon.nova-2-lite-v1:0": ModelInfo(
+        model_id="amazon.nova-2-lite-v1:0",
+        adapter=ADAPTER_CONVERSE,
+        allowed_regions=NOVA_REGIONS,
     ),
     # Finder / triage — Amazon Nova via Converse (soft region).
     "amazon.nova-pro-v1:0": ModelInfo(

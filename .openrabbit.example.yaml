@@ -21,19 +21,22 @@ review:
 
 model_roles:                   # role -> { model, region, ...provider opts }
   triage:
-    model: amazon.nova-lite-v1:0
-    region: ap-northeast-2
+    model: global.amazon.nova-2-lite-v1:0   # Nova 2 Lite via "global." profile
+    region: ap-northeast-2                  # Seoul (LIVE-VERIFIED on Converse)
   finder:
-    model: amazon.nova-pro-v1:0
+    model: global.amazon.nova-2-lite-v1:0
     region: ap-northeast-2
+    # TODO: enable Nova 2 Lite low-effort reasoning once the
+    # additionalModelRequestFields shape is confirmed in AWS docs
   verifier:
-    model: openai.gpt-5.5
+    model: openai.gpt-5.4
     region: us-east-2
-    reasoning_effort: medium
+    reasoning_effort: medium   # escalate to high for security/deep lens findings
     store: false
   premium:                     # optional, cost-gated
-    model: global.anthropic.claude-opus-4-6-v1
-    region: us-east-1
+    model: openai.gpt-5.4
+    region: us-east-2
+    reasoning_effort: high
     enabled: false
 
 external_tools:                # deterministic graders fed into context
