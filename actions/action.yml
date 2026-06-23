@@ -39,10 +39,11 @@ inputs:
     default: "us-east-2"
   verifier_region:
     description: >-
-      AWS region for the GPT-5.5 verifier's Bedrock bearer token. GPT-5.5 lives
-      ONLY on the bedrock-mantle us-east-1/us-east-2 endpoint, so this is
-      independent of the Nova `aws_region` (a token minted for the Nova region is
-      rejected by the mantle endpoint — 401).
+      AWS region for the GPT verifier's Bedrock bearer token (default model
+      openai.gpt-5.4; gpt-5.5 also supported). Both live ONLY on the
+      bedrock-mantle us-east-1/us-east-2 endpoint, so this is independent of the
+      Nova `aws_region` (a token minted for the Nova region is rejected by the
+      mantle endpoint — 401).
     required: false
     default: "us-east-2"
   python_version:
@@ -66,6 +67,23 @@ runs:
         fetch-depth: 0
         persist-credentials: false
 
+    # Trust-boundary prerequisite (SPEC §12): the checkout above is a
+    # detached-HEAD on the PR head commit, so the base branch ref does NOT exist
+    # locally — ``git show <base>:.openrabbit.yaml`` would fail and the policy
+    # would silently degrade to the untrusted head config. A composite action runs
+    # inside the caller's pull_request job, so ``github.base_ref`` is the PR target
+    # branch. Fetch it so ``origin/<base>`` resolves; the review step then passes
+    # ``--base-ref origin/<base>`` and cli.py anchors gate/lenses/path_filters to
+    # the trusted base. Skipped when github.base_ref is empty (non-PR event).
+    - name: Fetch base branch (policy trust anchor)
+      if: ${{ github.base_ref != '' }}
+      shell: bash
+      env:
+        OR_BASE_REF: ${{ github.base_ref }}
+      run: |
+        git fetch --no-tags --depth=1 origin "+refs/heads/${OR_BASE_REF}:refs/remotes/origin/${OR_BASE_REF}"
+        echo "Fetched base branch origin/${OR_BASE_REF} for policy trust anchor"
+
     - name: Set up uv
       uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
       with:
@@ -87,21 +105,22 @@ runs:
         aws-region: ${{ inputs.aws_region }}
         role-session-name: openrabbit-review-${{ github.run_id }}
 
-    # GPT-5.5 verifier auth. `configure-aws-credentials` above yields raw STS
-    # creds, but the OpenAI-compatible Bedrock endpoint (GPT-5.5) authenticates
-    # with a short-lived BEARER token, not SigV4. Derive that token from the STS
-    # creds already in the environment and export it (masked) to later steps via
-    # $GITHUB_ENV. Minted UNCONDITIONALLY: the shipped default .openrabbit.yaml
-    # configures an openai.* verifier, and an extra token on a config without one
-    # is harmless (the verifier provider simply never reads it).
+    # GPT verifier auth (default openai.gpt-5.4; gpt-5.5 also supported).
+    # `configure-aws-credentials` above yields raw STS creds, but the
+    # OpenAI-compatible Bedrock endpoint authenticates with a short-lived BEARER
+    # token, not SigV4. Derive that token from the STS creds already in the
+    # environment and export it (masked) to later steps via $GITHUB_ENV. Minted
+    # UNCONDITIONALLY: the shipped default .openrabbit.yaml configures an openai.*
+    # verifier, and an extra token on a config without one is harmless (the
+    # verifier provider simply never reads it).
     #
     # CRITICAL — region: the token is minted for `verifier_region` (default
-    # us-east-2), NOT the Nova `aws_region`. GPT-5.5 lives only on the
-    # bedrock-mantle us-east-1/us-east-2 endpoint; `provide_token(region=...)`
+    # us-east-2), NOT the Nova `aws_region`. Both gpt-5.4 and gpt-5.5 live only on
+    # the bedrock-mantle us-east-1/us-east-2 endpoint; `provide_token(region=...)`
     # bakes the region into the token's SigV4 scope, so a token minted for the
     # Nova region (e.g. ap-northeast-2 Seoul) is rejected by the mantle endpoint
     # (401).
-    - name: Mint Bedrock bearer token (GPT-5.5 verifier)
+    - name: Mint Bedrock bearer token (GPT-5.4/5.5 verifier)
       shell: bash
       env:
         OR_VERIFIER_REGION: ${{ inputs.verifier_region }}
@@ -123,20 +142,33 @@ runs:
       # (independent of the reviewed repo) into an ephemeral env and runs its
       # console script. Replace <OWNER>/<PINNED_SHA> with your org + the vetted
       # release SHA (Dependabot keeps it current). AWS_BEARER_TOKEN_BEDROCK is
-      # inherited from $GITHUB_ENV (minted above) for the GPT-5.5 verifier.
+      # inherited from $GITHUB_ENV (minted above) for the verifier (the default
+      # config ships openai.gpt-5.4; gpt-5.5 is also supported, same mantle
+      # region constraint).
+      #
+      # ``--base-ref origin/<base>`` anchors the review POLICY to the trusted base
+      # config (SPEC §12 trust boundary). It is appended only on a PR event (when
+      # github.base_ref is set AND the fetch above made origin/<base> resolvable);
+      # on a non-PR event it is omitted (cli.py then keeps the head policy).
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
         OR_REPO: ${{ github.repository }}
         OR_PR: ${{ inputs.pr }}
         OR_COMMIT: ${{ inputs.commit }}
         OR_CONFIG: ${{ inputs.config }}
-      run: >-
-        uv run
-        --with git+https://github.com/<OWNER>/openrabbit@<PINNED_SHA>
-        openrabbit review
-        --repo "$OR_REPO"
-        --pr "$OR_PR"
-        --commit "$OR_COMMIT"
-        --config "$OR_CONFIG"
-        --bot-login "github-actions[bot]"
-        --post
+        OR_BASE_REF: ${{ github.base_ref }}
+      run: |
+        base_ref_args=()
+        if [ -n "$OR_BASE_REF" ]; then
+          base_ref_args+=(--base-ref "origin/$OR_BASE_REF")
+        fi
+        uv run \
+          --with git+https://github.com/<OWNER>/openrabbit@<PINNED_SHA> \
+          openrabbit review \
+          --repo "$OR_REPO" \
+          --pr "$OR_PR" \
+          --commit "$OR_COMMIT" \
+          --config "$OR_CONFIG" \
+          --bot-login "github-actions[bot]" \
+          "${base_ref_args[@]}" \
+          --post

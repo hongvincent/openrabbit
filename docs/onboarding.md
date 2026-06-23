@@ -15,19 +15,41 @@ You do **not** need to add openrabbit to your repo's dependencies — onboarding
 resolves openrabbit independently of the target repo (it never reads your repo's
 `pyproject.toml`).
 
+> **⚠️ openrabbit is not yet published.** The distribution is **unpublished**
+> (`pyproject.toml` is still `version = 0.0.0`) and the public repo isn't created /
+> tagged yet, so the `uvx --from openrabbit` and `pipx install openrabbit` commands
+> below **fail today** with `No solution found`. Until openrabbit is published to
+> PyPI (or a private index) and the repo is tagged, use the **clone + `uv`** path —
+> it runs the CLI straight from the checked-out source and works right now.
+
 ```bash
-# Option A — no install at all (recommended): run via uvx, which fetches the
-# published `openrabbit` distribution on demand. Works in any repo, no deps added.
+# Option A — RUNNABLE TODAY (recommended while unpublished): clone the repo and
+# run the CLI from source via uv. No PyPI fetch, no deps added to the target repo.
+git clone https://github.com/<OWNER>/openrabbit.git
+uv sync --all-extras --project openrabbit            # install runtime deps once
+# Run `openrabbit init` against the repo you want to onboard (--path targets it):
+uv run --project openrabbit -- openrabbit init --path /path/to/your/repo            # dry-run
+uv run --project openrabbit -- openrabbit init --path /path/to/your/repo --write    # write the files
+uv run --project openrabbit -- openrabbit init --path /path/to/your/repo --write --force  # overwrite
+```
+
+Once openrabbit is **published** and the repo is **tagged**, the zero-install
+fetch paths below become the recommended ones (until then they error with
+`No solution found`):
+
+```bash
+# Option B — once published: no install at all, run via uvx (fetches the
+# published `openrabbit` distribution on demand). Works in any repo, no deps added.
 uvx --from openrabbit openrabbit init                  # dry-run — print the plan
 uvx --from openrabbit openrabbit init --write          # write the files to disk
 uvx --from openrabbit openrabbit init --write --force  # overwrite existing files
 
-# Option B — install the CLI once, then use it everywhere.
+# Option C — once published: install the CLI once, then use it everywhere.
 pipx install openrabbit        # (or `uv tool install openrabbit`)
 openrabbit init                # dry-run
 openrabbit init --write        # write the files to disk
 
-# Option C — the gh extension wrapper (same flow + the guarded gh mutations).
+# Option D — once tagged: the gh extension wrapper (same flow + guarded gh mutations).
 # Install it as a real gh extension, then call it like any gh subcommand:
 gh extension install <OWNER>/openrabbit --pin <SHA>   # ships cli/gh-openrabbit/
 gh openrabbit init                                     # dry-run

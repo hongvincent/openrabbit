@@ -69,10 +69,15 @@ _INFERENCE_OPT_KEYS: dict[str, str] = {
 }
 
 # Nova 2 extended-thinking (reasoning) effort levels accepted via the Converse
-# ``additionalModelRequestFields.reasoningConfig.maxReasoningEffort``. Anything
-# else (absent / None / "none" / "off") means reasoning is DISABLED and no
-# reasoningConfig is injected (the model default ``type: "disabled"``).
+# ``additionalModelRequestFields.reasoningConfig.maxReasoningEffort``.
 _REASONING_EFFORTS: frozenset[str] = frozenset({"low", "medium", "high"})
+
+# Explicit "reasoning disabled" sentinels. ``None`` / "none" / "off" / "" mean no
+# reasoningConfig is injected (the model default ``type: "disabled"``). Anything
+# OUTSIDE both this set and ``_REASONING_EFFORTS`` is a typo and must RAISE — a
+# silent disable would burn a non-thinking pass while the operator believed
+# extended thinking was on (parity with the Responses adapter, which raises).
+_REASONING_DISABLE_VALUES: frozenset[str] = frozenset({"none", "off", ""})
 
 # inferenceConfig sampling keys that MUST be omitted when reasoning effort is
 # "high": Nova 2 raises a ValidationException if temperature/topP/topK are sent
@@ -237,15 +242,27 @@ class ConverseAdapter(Provider):
         """Map a neutral ``reasoning_effort`` opt to a Nova 2 effort or None.
 
         ``"low"``/``"medium"``/``"high"`` enable extended thinking; absent /
-        ``None`` / ``"none"`` / ``"off"`` (case-insensitively) mean disabled,
-        returning ``None`` so no ``reasoningConfig`` is injected.
+        ``None`` / ``"none"`` / ``"off"`` / ``""`` (case-insensitively) mean
+        disabled, returning ``None`` so no ``reasoningConfig`` is injected.
+
+        Any OTHER value is a typo (e.g. ``"minimal"``, ``"xhigh"``) and RAISES a
+        :class:`ProviderError` rather than silently disabling reasoning — a silent
+        disable would burn a non-thinking pass while the operator believed
+        extended thinking was on. This matches the Responses adapter, which also
+        raises on an unrecognized effort.
         """
         if value is None:
             return None
         effort = str(value).strip().lower()
+        if effort in _REASONING_DISABLE_VALUES:
+            return None
         if effort in _REASONING_EFFORTS:
             return effort
-        return None
+        raise ProviderError(
+            f"invalid reasoning effort {value!r}; expected one of "
+            f"{sorted(_REASONING_EFFORTS)} or a disable sentinel "
+            f"({sorted(_REASONING_DISABLE_VALUES - {''})}/None)"
+        )
 
     @staticmethod
     def _build_system(system: str, *, use_cache: bool) -> list[dict[str, Any]]:

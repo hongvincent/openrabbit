@@ -303,6 +303,87 @@ def test_onboarding_documents_init_and_rollout() -> None:
     assert "marketplace" in low or "plugin" in low
 
 
+def test_onboarding_install_path_is_runnable_today() -> None:
+    """Finding #1 (HIGH): the install section must lead with a path that actually
+    runs TODAY. ``openrabbit`` is unpublished (pyproject ``version = 0.0.0`` and the
+    repo is not created/tagged yet), so ``uvx --from openrabbit`` / ``pipx install
+    openrabbit`` error with 'No solution found'. The PRIMARY documented path must be
+    a clone + ``uv`` flow (``uv sync`` / ``uv run --project``) that works against the
+    checked-out source, with an explicit 'unpublished' caveat. ``uvx``/``pipx`` may
+    still appear, but only flagged as the POST-publish path.
+    """
+    text = _text(ONBOARDING)
+    low = text.lower()
+
+    # An explicit caveat that the package is not yet published (so a reader does
+    # not paste a uvx/pipx command that fails with 'No solution found').
+    assert "unpublished" in low or "not yet published" in low or (
+        "not published" in low
+    ), "onboarding.md must flag that openrabbit is not yet published on PyPI"
+
+    # The primary runnable path is a clone + uv flow against the source tree.
+    assert "git clone" in low or "clone the repo" in low or "clone openrabbit" in low, (
+        "onboarding.md must document cloning the repo as the runnable install path"
+    )
+    # A working uv invocation that runs the CLI from the checked-out source —
+    # `uv run` (optionally `--project`) or `uv sync`, NOT a published-package fetch.
+    assert "uv run" in low or "uv sync" in low, (
+        "onboarding.md must document a `uv run`/`uv sync` runnable install path"
+    )
+
+    # The 'recommended' label must NOT sit on the unpublished uvx path. Find the
+    # line that recommends an option and assert it is not the uvx/pipx fetch.
+    for line in text.splitlines():
+        ll = line.lower()
+        if "recommend" in ll:
+            assert not ("uvx" in ll and "--from openrabbit" in ll), (
+                "the 'recommended' install path must not be the unpublished "
+                "`uvx --from openrabbit` fetch (it errors with 'No solution found')"
+            )
+
+    # If uvx/pipx remain documented, they must be framed as the post-publish path.
+    if "uvx --from openrabbit" in low or "pipx install openrabbit" in low:
+        assert (
+            "once published" in low
+            or "when published" in low
+            or ("after" in low and "publish" in low)
+        ), (
+            "onboarding.md must frame uvx/pipx as the post-publish path "
+            "('once published'), not a path that runs today"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# docs/configuration.md — ONE wired finder-reasoning mechanism                #
+# --------------------------------------------------------------------------- #
+def test_configuration_names_only_wired_lens_reasoning_mechanism() -> None:
+    """Finding #2: the finder's reasoning effort is wired through exactly ONE
+    mechanism — ``review.lens_reasoning_effort`` (per-lens), threaded by the
+    orchestrator into the finder Converse call. configuration.md must NAME that
+    wired mechanism (so a reader configures the knob that actually does something),
+    and must NOT advertise a second, divergent ``model_roles.finder.reasoning_effort``
+    per-role knob for the finder (which the pipeline never reads — the finder's
+    reasoning is driven purely by ``lens_reasoning_effort``).
+    """
+    text = _text(CONFIGURATION)
+    low = text.lower()
+
+    # The wired mechanism must be named explicitly.
+    assert "lens_reasoning_effort" in low, (
+        "configuration.md must name the wired review.lens_reasoning_effort knob "
+        "(the only mechanism that drives finder reasoning effort)"
+    )
+
+    # No divergent per-role finder reasoning_effort knob may be advertised. The
+    # finder ships with NO reasoning_effort key in model_roles; reasoning is
+    # configured per lens. Guard against the misleading "per role (and per lens
+    # for the finder)" framing that implies a model_roles.finder.reasoning_effort.
+    assert "per role (and per lens for the finder)" not in low, (
+        "configuration.md must not imply a per-role finder reasoning_effort knob; "
+        "the wired mechanism is review.lens_reasoning_effort (per lens)"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # SBOM generation script                                                      #
 # --------------------------------------------------------------------------- #
