@@ -35,7 +35,7 @@ from typing import Any, Optional
 
 from openrabbit.domain import Message, ToolSpec
 from openrabbit.findings import SEVERITIES, Finding
-from openrabbit.providers.base import Provider
+from openrabbit.providers.base import Provider, ProviderError
 
 _LOG = logging.getLogger(__name__)
 
@@ -208,7 +208,17 @@ def _result_text_preview(result: Any, limit: int = 200) -> str:
     operator can tell a content-filter refusal apart from a transport failure.
     """
     text = getattr(result, "text", "") or ""
-    text = str(text).replace("\n", " ").replace("\r", " ").strip()
+    return _truncate_single_line(text, limit)
+
+
+def _truncate_single_line(text: Any, limit: int = 200) -> str:
+    """Collapse to one line and truncate for safe logging.
+
+    Used for both verifier text previews and provider-error reasons so an
+    unbounded blob (or a large/sensitive payload echoed in an error) is never
+    dumped verbatim into the logs.
+    """
+    text = str(text or "").replace("\n", " ").replace("\r", " ").strip()
     if len(text) > limit:
         return text[:limit] + "…"
     return text
@@ -274,36 +284,65 @@ def verify_findings(
             max_tokens if max_tokens is not None else _batch_max_tokens(len(to_verify))
         )
         user = Message(role="user", content=_build_prompt(to_verify, high_risk))
-        result = verifier.complete(
-            _SYSTEM_PROMPT,
-            [user],
-            [_verify_tool()],
-            budget,
-            None,
-            # Canonical neutral tool_choice = the bare tool name. Each adapter
-            # translates it to its own forced-single-tool wire shape (Converse:
-            # toolChoice={"tool":{"name":..}}; Responses: {"type":"function",..}).
-            tool_choice=VERIFY_TOOL,
-        )
-        verdicts = _parse_verdicts(result)
-        if verdicts is None:
-            # The verifier produced NO usable verdict array (refusal, content
-            # filter, transport hiccup, or unparseable output). This is NOT the
-            # same as "the verifier vetted these and dropped them" — silently
-            # zeroing every HIGH/CRITICAL candidate on a single refusal would be
-            # a catastrophic recall failure. Fail SAFE: fall back to the finder's
-            # own confidence through the same gate (the cheaper-path policy), so
-            # genuine candidates still surface instead of vanishing. Log loudly
-            # so the unparseable/refused turn is never mistaken for "no issues".
+        try:
+            result = verifier.complete(
+                _SYSTEM_PROMPT,
+                [user],
+                [_verify_tool()],
+                budget,
+                None,
+                # Canonical neutral tool_choice = the bare tool name. Each adapter
+                # translates it to its own forced-single-tool wire shape (Converse:
+                # toolChoice={"tool":{"name":..}}; Responses: {"type":"function",..}).
+                tool_choice=VERIFY_TOOL,
+            )
+        except ProviderError as exc:
+            # The verifier call itself FAILED with a terminal, non-retryable
+            # provider error. The providers already retried transient 429/5xx
+            # internally, so only a non-retryable 4xx (e.g. OpenAI's cyber-safety
+            # filter, which a real SECURITY-vulnerability diff is exactly what
+            # trips) or an exhausted backoff reaches here. Propagating would abort
+            # the WHOLE review — so the highest-value SECURITY PRs would fail
+            # outright. Fail SAFE with the SAME policy as a refusal/empty verdict:
+            # fall back to the finder's own confidence through the gate so genuine
+            # findings still post. Log loudly, distinguishing "verifier
+            # unavailable" from a normal verdict, with the truncated (secret-free)
+            # reason.
             _LOG.warning(
-                "verifier returned no usable verdicts for %d finding(s) "
-                "(refusal/content-filter/unparseable); falling back to finder "
-                "confidence through the gate (%.2f) instead of dropping all. "
-                "verifier_text=%r",
+                "verifier unavailable (ProviderError: %s); soft-skipping the "
+                "verifier for %d finding(s) and falling back to finder "
+                "confidence through the gate (%.2f) instead of aborting the "
+                "review.",
+                _truncate_single_line(exc),
                 len(to_verify),
                 gate,
-                _result_text_preview(result),
             )
+            verdicts = None  # take the fail-safe fallback below
+        else:
+            verdicts = _parse_verdicts(result)
+            if verdicts is None:
+                # The verifier produced NO usable verdict array (refusal, content
+                # filter, or unparseable output). This is NOT the same as "the
+                # verifier vetted these and dropped them" — silently zeroing every
+                # HIGH/CRITICAL candidate on a single refusal would be a
+                # catastrophic recall failure. Log loudly so the unparseable/
+                # refused turn is never mistaken for "no issues"; the shared
+                # fallback below keeps genuine candidates.
+                _LOG.warning(
+                    "verifier returned no usable verdicts for %d finding(s) "
+                    "(refusal/content-filter/unparseable); falling back to finder "
+                    "confidence through the gate (%.2f) instead of dropping all. "
+                    "verifier_text=%r",
+                    len(to_verify),
+                    gate,
+                    _result_text_preview(result),
+                )
+
+        if verdicts is None:
+            # Fail SAFE (shared by the ProviderError and refusal/empty paths):
+            # fall back to the finder's own confidence through the same gate (the
+            # cheaper-path policy), so genuine candidates still surface instead of
+            # vanishing or aborting the review.
             for finding in to_verify:
                 if finding.confidence >= gate:
                     verified_kept[id(finding)] = finding

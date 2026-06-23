@@ -69,7 +69,7 @@ code. Forked PRs run untrusted code with access to secrets.
   `sub` to the repo/branch. No static AWS keys exist to leak. The IAM role is
   scoped to the exact Bedrock model / inference-profile ARNs (least privilege).
 - **No model-side retention.** `store: false` is set on every Bedrock Responses
-  (GPT-5.5) call — private code is not retained server-side.
+  (GPT-5.4) call — private code is not retained server-side.
 - **Forked-PR safety.** Reviews run on `pull_request` (not `pull_request_target`)
   so a fork's code never runs *with* repository secrets. External-contributor PRs
   do not receive secrets.

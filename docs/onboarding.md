@@ -44,7 +44,7 @@ gh openrabbit init --write --apply --role-arn=<arn>    # write + set the secret
 `init` produces:
 
 1. **`.openrabbit.yaml`** — stack-aware config (lenses + `model_roles` defaulting
-   to a Nova-Pro finder and a GPT-5.5 verifier). `external_tools` is scaffolded as
+   to a Nova 2 Lite finder and a GPT-5.4 verifier). `external_tools` is scaffolded as
    a **reserved, not-yet-wired** block (`enabled: []`) — the pipeline does not run
    those graders yet, so the config never advertises a feature that does not run.
 2. **`.github/workflows/openrabbit.yml`** — a **thin caller** workflow that
