@@ -42,6 +42,16 @@ DEFAULT_LENSES = list(LENSES)
 # by default; everything below takes the cheaper finder-confidence path (SPEC
 # 7.3 cost lever #3). Widen via review.verify_min_severity.
 DEFAULT_VERIFY_MIN_SEVERITY = "high"
+# TRUST-CORE lenses: findings in these categories route through the verifier
+# REGARDLESS of severity (verify-strict thesis). A hallucinated medium/correctness
+# finding is thus actually re-checked (and refuted) instead of posting blind via
+# the cheap finder-confidence path. Override via review.always_verify_categories.
+DEFAULT_ALWAYS_VERIFY_CATEGORIES = frozenset({"correctness", "security"})
+# Findings that STILL bypass the verifier (below verify_min_severity AND not
+# trust-core) must clear a HIGHER finder-confidence bar than the normal gate to
+# post UN-verified — so low/maintainability nitpicks at ~0.8 are dropped rather
+# than posted unverified (low-noise). Must be >= confidence_gate.
+DEFAULT_UNVERIFIED_CONFIDENCE_GATE = 0.9
 
 PathLike = Union[str, Path]
 
@@ -74,6 +84,16 @@ class ReviewConfig:
     #: Minimum severity routed through the (expensive) cross-family verifier;
     #: less-severe findings take the cheaper finder-confidence path.
     verify_min_severity: str = DEFAULT_VERIFY_MIN_SEVERITY
+    #: TRUST-CORE categories routed through the verifier REGARDLESS of severity
+    #: (verify-strict). A finding is verified if it is at least as severe as
+    #: ``verify_min_severity`` OR its category is in this set.
+    always_verify_categories: frozenset[str] = field(
+        default_factory=lambda: frozenset(DEFAULT_ALWAYS_VERIFY_CATEGORIES)
+    )
+    #: Higher finder-confidence bar a finding must clear to post UN-verified (when
+    #: it bypassed the verifier). Must be >= ``confidence_gate``; dropping noisy
+    #: low-severity nitpicks that the verifier never vetted.
+    unverified_confidence_gate: float = DEFAULT_UNVERIFIED_CONFIDENCE_GATE
     #: Per-lens finder reasoning effort (``{lens: "low"|"medium"|"high"}``). A
     #: lens omitted here runs with reasoning OFF. ``run_lenses`` threads each
     #: configured effort into the finder ``complete()`` call as
@@ -300,6 +320,12 @@ def _parse_review(raw: Any) -> ReviewConfig:
             f"{SEVERITIES}, got {verify_min_severity!r}"
         )
 
+    always_verify_categories = _parse_always_verify_categories(
+        block.get("always_verify_categories")
+    )
+
+    unverified_gate = _parse_unverified_confidence_gate(block, float(gate))
+
     lens_reasoning_effort = _parse_lens_reasoning_effort(
         block.get("lens_reasoning_effort", {}) or {}
     )
@@ -312,8 +338,58 @@ def _parse_review(raw: Any) -> ReviewConfig:
         path_instructions=instructions,
         lenses=list(lenses),
         verify_min_severity=verify_min_severity,
+        always_verify_categories=always_verify_categories,
+        unverified_confidence_gate=unverified_gate,
         lens_reasoning_effort=lens_reasoning_effort,
     )
+
+
+def _parse_always_verify_categories(raw: Any) -> frozenset[str]:
+    """Parse + validate ``review.always_verify_categories`` (trust-core lenses).
+
+    Absent (``None``) falls back to the default trust-core set
+    ({correctness, security}). An explicit empty list disables always-verify
+    routing (only severity governs). Each entry must be a known category so a
+    typo fails fast rather than silently re-opening the verify-strict leak.
+    """
+    if raw is None:
+        return frozenset(DEFAULT_ALWAYS_VERIFY_CATEGORIES)
+    if not _is_str_list(raw):
+        raise ConfigError(
+            "review.always_verify_categories must be a list of category strings"
+        )
+    for cat in raw:
+        if cat not in LENSES:
+            raise ConfigError(
+                "review.always_verify_categories contains unknown category "
+                f"{cat!r}; allowed: {LENSES}"
+            )
+    return frozenset(raw)
+
+
+def _parse_unverified_confidence_gate(block: dict[str, Any], gate: float) -> float:
+    """Parse + validate ``review.unverified_confidence_gate``.
+
+    Findings that bypass the verifier must clear a HIGHER bar than the normal
+    gate, else the FP leak this knob closes re-opens. When NOT set explicitly it
+    defaults to ``max(DEFAULT_UNVERIFIED_CONFIDENCE_GATE, confidence_gate)`` so it
+    is never below the gate (a high configured ``confidence_gate`` simply raises
+    it). An EXPLICIT value below the gate, or outside ``[0, 1]``, is an error.
+    """
+    if "unverified_confidence_gate" not in block:
+        return max(DEFAULT_UNVERIFIED_CONFIDENCE_GATE, gate)
+    value = block.get("unverified_confidence_gate")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ConfigError("review.unverified_confidence_gate must be a number")
+    value = float(value)
+    if not 0.0 <= value <= 1.0:
+        raise ConfigError("review.unverified_confidence_gate must be within [0, 1]")
+    if value < gate:
+        raise ConfigError(
+            "review.unverified_confidence_gate "
+            f"({value}) must be >= review.confidence_gate ({gate})"
+        )
+    return value
 
 
 def _parse_lens_reasoning_effort(raw: Any) -> dict[str, str]:

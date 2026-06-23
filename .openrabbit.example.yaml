@@ -9,6 +9,18 @@ review:
                                # cross-family) verifier; lesser findings use the
                                # cheaper finder-confidence + gate path
                                # (critical | high | medium | low | nit)
+  always_verify_categories: [correctness, security]
+                               # TRUST-CORE lenses: route through the verifier
+                               # REGARDLESS of severity, so a hallucinated
+                               # medium/correctness finding is re-checked (and
+                               # refuted) instead of posting blind. Set [] to
+                               # disable (only severity governs routing).
+  unverified_confidence_gate: 0.9
+                               # higher finder-confidence bar a finding must clear
+                               # to post UN-verified (it bypassed the verifier:
+                               # below verify_min_severity AND not trust-core).
+                               # Must be >= confidence_gate. Drops low/maintainability
+                               # nitpicks at ~0.8 the verifier never vetted.
   incremental: true            # review diff since last_reviewed_sha when available
   path_filters:
     - "!**/dist/**"

@@ -389,6 +389,8 @@ def review(
         raw_findings,
         gate=config.review.confidence_gate,
         min_severity=config.review.verify_min_severity,
+        always_verify_categories=config.review.always_verify_categories,
+        unverified_confidence_gate=config.review.unverified_confidence_gate,
         high_risk_files=high_risk_files,
         verifier_reasoning_effort=verifier_effort,
     )
