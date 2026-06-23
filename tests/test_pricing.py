@@ -40,6 +40,93 @@ class TestPriceTable:
 
 
 # --------------------------------------------------------------------------- #
+# corrected + newly added Bedrock prices (2026-06-23 model-choice update)      #
+# --------------------------------------------------------------------------- #
+class TestCorrectedAndNewPrices:
+    """Verifies the gpt-5.5 correction and the gpt-5.4 / nova-2-lite /
+    nova-premier additions land at their best-effort public-list Bedrock rates.
+
+    NOTE: gpt-5.5 here is a *correction* of a prior 4x-understated entry
+    (was input=1.25 / output=10.00); the real Bedrock rate is 5.50 / 33.00.
+    Asserting the new value is fixing a wrong assertion, not weakening one.
+    """
+
+    def test_gpt_5_5_corrected_rate(self):
+        price = pricing.PRICE_TABLE["openai.gpt-5.5"]
+        assert price.input_per_mtok == pytest.approx(5.50)
+        assert price.output_per_mtok == pytest.approx(33.00)
+        assert price.cache_read_per_mtok == pytest.approx(0.55)
+        assert price.cache_write_per_mtok == pytest.approx(5.50)
+
+    def test_gpt_5_4_added(self):
+        price = pricing.PRICE_TABLE["openai.gpt-5.4"]
+        assert price.input_per_mtok == pytest.approx(2.75)
+        assert price.output_per_mtok == pytest.approx(16.50)
+        assert price.cache_read_per_mtok == pytest.approx(0.275)
+        assert price.cache_write_per_mtok == pytest.approx(2.75)
+
+    def test_nova_2_lite_added(self):
+        price = pricing.PRICE_TABLE["amazon.nova-2-lite-v1:0"]
+        assert price.input_per_mtok == pytest.approx(0.30)
+        assert price.output_per_mtok == pytest.approx(2.50)
+        assert price.cache_read_per_mtok == pytest.approx(0.075)
+        assert price.cache_write_per_mtok == pytest.approx(0.30)
+
+    def test_nova_premier_added(self):
+        price = pricing.PRICE_TABLE["amazon.nova-premier-v1:0"]
+        assert price.input_per_mtok == pytest.approx(2.50)
+        assert price.output_per_mtok == pytest.approx(12.50)
+        assert price.cache_read_per_mtok == pytest.approx(0.625)
+        assert price.cache_write_per_mtok == pytest.approx(2.50)
+
+    def test_lookup_resolves_corrected_and_new_models(self):
+        # Each new/corrected model resolves via exact lookup.
+        assert pricing.lookup_price("openai.gpt-5.5") is (
+            pricing.PRICE_TABLE["openai.gpt-5.5"]
+        )
+        assert pricing.lookup_price("openai.gpt-5.4") is (
+            pricing.PRICE_TABLE["openai.gpt-5.4"]
+        )
+        assert pricing.lookup_price("amazon.nova-2-lite-v1:0") is (
+            pricing.PRICE_TABLE["amazon.nova-2-lite-v1:0"]
+        )
+        assert pricing.lookup_price("amazon.nova-premier-v1:0") is (
+            pricing.PRICE_TABLE["amazon.nova-premier-v1:0"]
+        )
+
+    def test_nova_2_lite_resolves_via_global_profile_prefix(self):
+        # Live-verified id form: the "global." inference-profile prefix (NOT
+        # "apac.") wraps the Nova 2 base id and must price as the base model.
+        price = pricing.lookup_price("global.amazon.nova-2-lite-v1:0")
+        assert price is pricing.PRICE_TABLE["amazon.nova-2-lite-v1:0"]
+
+    def test_gpt_5_4_resolves_via_us_profile_prefix(self):
+        # "us.openai.gpt-5.4" (cross-region profile) prices as the base model.
+        price = pricing.lookup_price("us.openai.gpt-5.4")
+        assert price is pricing.PRICE_TABLE["openai.gpt-5.4"]
+
+    def test_cost_estimate_uses_corrected_gpt_5_5_rate(self):
+        # A pure-input 1M-token estimate must reflect the corrected $5.50/MTok
+        # rate, not the old (4x-understated) $1.25.
+        cost = pricing.estimate_cost_for_model(
+            Usage(input_tokens=1_000_000), "openai.gpt-5.5"
+        )
+        assert cost == pytest.approx(5.50)
+
+    def test_cost_estimate_for_new_models(self):
+        # Sanity: 1M input tokens prices at the table's input rate for each.
+        assert pricing.estimate_cost_for_model(
+            Usage(input_tokens=1_000_000), "openai.gpt-5.4"
+        ) == pytest.approx(2.75)
+        assert pricing.estimate_cost_for_model(
+            Usage(input_tokens=1_000_000), "amazon.nova-2-lite-v1:0"
+        ) == pytest.approx(0.30)
+        assert pricing.estimate_cost_for_model(
+            Usage(input_tokens=1_000_000), "amazon.nova-premier-v1:0"
+        ) == pytest.approx(2.50)
+
+
+# --------------------------------------------------------------------------- #
 # price lookup                                                                 #
 # --------------------------------------------------------------------------- #
 class TestPriceLookup:
