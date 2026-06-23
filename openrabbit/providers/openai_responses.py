@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import time
 from typing import Any, Optional
 
 from openrabbit.domain import (
@@ -51,8 +53,23 @@ DEFAULT_MODEL = "openai.gpt-5.5"
 DEFAULT_REGION = "us-east-2"
 DEFAULT_REASONING_EFFORT = "medium"
 
-#: Environment variables holding the Bearer token (checked in this order).
-_BEARER_ENV_VARS: tuple[str, ...] = ("AWS_BEARER_TOKEN_BEDROCK", "OPENAI_API_KEY")
+#: Environment variables holding the Bearer token.
+#:
+#: ONLY ``AWS_BEARER_TOKEN_BEDROCK`` is accepted. The OpenAI-shaped wire format
+#: is incidental — this endpoint is the AWS Bedrock *mantle*, NOT api.openai.com,
+#: so ``OPENAI_API_KEY`` is deliberately excluded: silently falling back to an
+#: OpenAI key would ship that secret to the AWS endpoint (and mask a missing AWS
+#: token). Fail fast on the one correct credential instead.
+_BEARER_ENV_VARS: tuple[str, ...] = ("AWS_BEARER_TOKEN_BEDROCK",)
+
+#: Bounded exponential-backoff-with-jitter for retryable transport failures
+#: (HTTP 429 / 5xx and transient timeouts). Bedrock throttles under load, so a
+#: single un-retried POST drops whole findings batches.
+_MAX_ATTEMPTS = 4  # 1 initial try + up to 3 retries
+_BACKOFF_BASE_SECONDS = 0.5
+_BACKOFF_MAX_SECONDS = 20.0
+#: HTTP statuses worth retrying (429 throttling + transient server errors).
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
 def _base_url(region: str) -> str:
@@ -259,18 +276,80 @@ class OpenAIResponsesAdapter(Provider):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(_MAX_ATTEMPTS):
+            try:
+                with httpx.Client(timeout=self._timeout) as client:
+                    response = client.post(url, headers=headers, json=body)
+                    response.raise_for_status()
+                    return response.json()
+            except httpx.HTTPStatusError as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                if status in _RETRYABLE_STATUSES and attempt < _MAX_ATTEMPTS - 1:
+                    last_exc = exc
+                    self._sleep_before_retry(attempt, exc)
+                    continue
+                # Non-retryable (4xx != 429) or retries exhausted.
+                detail = self._error_detail(exc)
+                raise ProviderError(
+                    f"Responses API returned an error status: {detail}"
+                ) from exc
+            except httpx.TimeoutException as exc:
+                # Transient timeouts are retryable.
+                if attempt < _MAX_ATTEMPTS - 1:
+                    last_exc = exc
+                    self._sleep_before_retry(attempt, exc)
+                    continue
+                raise ProviderError(
+                    f"Responses API request failed: {exc}"
+                ) from exc
+            except httpx.HTTPError as exc:  # other transport-level errors
+                raise ProviderError(
+                    f"Responses API request failed: {exc}"
+                ) from exc
+
+        # Defensive: loop only exits via return/raise above, but if every
+        # attempt was retryable and we fell through, surface the last error.
+        raise ProviderError(  # pragma: no cover - unreachable guard
+            f"Responses API request failed after {_MAX_ATTEMPTS} attempts: "
+            f"{last_exc}"
+        )
+
+    @classmethod
+    def _sleep_before_retry(cls, attempt: int, exc: Any) -> None:
+        """Sleep with exponential backoff + jitter, honoring Retry-After.
+
+        ``attempt`` is the zero-based attempt index that just failed. The base
+        backoff is ``_BACKOFF_BASE_SECONDS * 2**attempt`` plus full jitter,
+        clamped to ``_BACKOFF_MAX_SECONDS``. A server ``Retry-After`` (seconds)
+        sets a floor so we never poll faster than the server asked.
+        """
+        backoff = min(
+            _BACKOFF_MAX_SECONDS, _BACKOFF_BASE_SECONDS * (2**attempt)
+        )
+        # Full jitter in [0, backoff]; random is patched in tests for determinism.
+        delay = random.random() * backoff
+        retry_after = cls._retry_after_seconds(exc)
+        if retry_after is not None:
+            delay = max(delay, retry_after)
+        time.sleep(delay)
+
+    @staticmethod
+    def _retry_after_seconds(exc: Any) -> Optional[float]:
+        """Parse a ``Retry-After`` header (seconds) off the error response."""
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", None)
+        if not headers:
+            return None
+        raw = headers.get("Retry-After") or headers.get("retry-after")
+        if raw is None:
+            return None
         try:
-            with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(url, headers=headers, json=body)
-                response.raise_for_status()
-                return response.json()
-        except httpx.HTTPStatusError as exc:
-            detail = self._error_detail(exc)
-            raise ProviderError(
-                f"Responses API returned an error status: {detail}"
-            ) from exc
-        except httpx.HTTPError as exc:  # transport-level (connect/timeout/...)
-            raise ProviderError(f"Responses API request failed: {exc}") from exc
+            seconds = float(raw)
+        except (TypeError, ValueError):
+            return None  # HTTP-date form is not honored; fall back to backoff.
+        return max(0.0, seconds)
 
     #: Upstream error bodies may reflect untrusted request fragments; bound the
     #: length we interpolate so a verbose/echoed body cannot flood CI logs.
@@ -329,8 +408,16 @@ class OpenAIResponsesAdapter(Provider):
     def _extract_message_text(item: dict[str, Any]) -> str:
         parts: list[str] = []
         for block in item.get("content", []) or []:
-            if block.get("type") in ("output_text", "text"):
+            block_type = block.get("type")
+            if block_type in ("output_text", "text"):
                 parts.append(block.get("text", ""))
+            elif block_type == "refusal":
+                # A refusal block carries the model's decline reason under
+                # ``refusal``. Surfacing it (instead of dropping it) is critical:
+                # otherwise a refused turn looks like a clean EMPTY completion
+                # (no text, no tool_calls, STOP), which downstream silently
+                # interprets as "no issues" and can zero every finding.
+                parts.append(block.get("refusal", "") or "")
         return "".join(parts)
 
     @staticmethod
@@ -357,9 +444,14 @@ class OpenAIResponsesAdapter(Provider):
             cache_write=0,
         )
 
-    @staticmethod
+    #: ``incomplete_details.reason`` values that mean a safety/content filter
+    #: stopped the turn (NOT a length truncation). The precise reason stays in
+    #: ``CompletionResult.raw['incomplete_details']`` for callers that need it.
+    _CONTENT_FILTER_REASONS = frozenset({"content_filter", "content_filtered"})
+
+    @classmethod
     def _normalize_finish(
-        payload: dict[str, Any], tool_calls: list[ToolCall]
+        cls, payload: dict[str, Any], tool_calls: list[ToolCall]
     ) -> FinishReason:
         if tool_calls:
             return FinishReason.TOOL_USE
@@ -369,6 +461,13 @@ class OpenAIResponsesAdapter(Provider):
             reason = (payload.get("incomplete_details") or {}).get("reason")
             if reason == "max_output_tokens":
                 return FinishReason.MAX_TOKENS
+            if reason in cls._CONTENT_FILTER_REASONS:
+                # A safety stop is terminal, NOT a length truncation. The domain
+                # FinishReason enum has no content-filter member, so map it to
+                # STOP (matching ConverseAdapter's content_filtered -> STOP) and
+                # keep LENGTH reserved for genuine truncation. The exact reason
+                # remains available on the raw payload.
+                return FinishReason.STOP
             return FinishReason.LENGTH
         # "completed" and any other terminal status -> STOP.
         return FinishReason.STOP

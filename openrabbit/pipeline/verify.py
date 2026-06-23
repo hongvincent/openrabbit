@@ -30,11 +30,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 from typing import Any, Optional
 
 from openrabbit.domain import Message, ToolSpec
 from openrabbit.findings import SEVERITIES, Finding
 from openrabbit.providers.base import Provider
+
+_LOG = logging.getLogger(__name__)
 
 VERIFY_TOOL = "verify_findings"
 DEFAULT_GATE = 0.80
@@ -71,6 +74,11 @@ _SYSTEM_PROMPT = (
 # model must emit ONLY the declared keys, so a stray/injected field (from
 # untrusted finding text steering the verifier) can't smuggle extra data through
 # the structured-output channel.
+#
+# OpenAI strict structured-outputs (the Responses adapter forces ``strict: true``)
+# additionally requires that EVERY object list ALL of its properties in
+# ``required``. ``rationale`` is optional, so under strict mode it stays in
+# ``required`` but is made nullable (``["string", "null"]``) rather than omitted.
 _VERDICT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -78,9 +86,10 @@ _VERDICT_SCHEMA: dict[str, Any] = {
         "id": {"type": "integer", "minimum": 0},
         "keep": {"type": "boolean"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-        "rationale": {"type": "string"},
+        # Optional -> nullable + still listed in `required` (strict-mode rule).
+        "rationale": {"type": ["string", "null"]},
     },
-    "required": ["id", "keep", "confidence"],
+    "required": ["id", "keep", "confidence", "rationale"],
 }
 
 _VERIFY_SCHEMA: dict[str, Any] = {
@@ -153,20 +162,31 @@ def _build_prompt(findings: list[Finding], high_risk: bool) -> str:
     )
 
 
-def _parse_verdicts(result: Any) -> dict[int, dict[str, Any]]:
+def _parse_verdicts(result: Any) -> Optional[dict[int, dict[str, Any]]]:
     """Extract ``{id: verdict}`` from the batched ``verify_findings`` tool call.
 
-    Returns an empty mapping when no usable verdict array is present. Verdicts
-    missing required keys or a usable id are skipped (their findings drop).
+    Returns:
+
+    * a mapping (possibly empty) when the verifier produced a usable
+      ``verify_findings`` tool call carrying a verdict ARRAY — even an empty
+      array is a real answer, and any id missing from it drops (filter-strict);
+    * ``None`` when there is NO usable verifier output at all — the model
+      refused, errored, or emitted no ``verify_findings`` call with a list. This
+      is DISTINCT from "verified and dropped": the caller must NOT treat it as a
+      blanket "drop everything", or a single refusal would silently zero every
+      candidate finding.
+
+    Verdicts missing required keys or a usable id are skipped (their findings
+    drop), but their presence still counts as a real verifier answer.
     """
     calls = getattr(result, "tool_calls", None) or []
     call = next((c for c in calls if getattr(c, "name", None) == VERIFY_TOOL), None)
     if call is None:
-        return {}
+        return None  # no verify_findings call -> refusal / empty / unparseable
     args = call.args or {}
     raw = args.get("verdicts")
     if not isinstance(raw, list):
-        return {}
+        return None  # malformed: no verdict array -> not a usable answer
     verdicts: dict[int, dict[str, Any]] = {}
     for item in raw:
         if not isinstance(item, dict):
@@ -179,6 +199,19 @@ def _parse_verdicts(result: Any) -> dict[int, dict[str, Any]]:
             continue
         verdicts[vid] = item
     return verdicts
+
+
+def _result_text_preview(result: Any, limit: int = 200) -> str:
+    """A short, single-line preview of the verifier's text (for logging).
+
+    Surfaces a refusal message (which the adapter now puts on ``text``) so the
+    operator can tell a content-filter refusal apart from a transport failure.
+    """
+    text = getattr(result, "text", "") or ""
+    text = str(text).replace("\n", " ").replace("\r", " ").strip()
+    if len(text) > limit:
+        return text[:limit] + "…"
+    return text
 
 
 def _calibrated(verdict: dict[str, Any], gate: float) -> Optional[float]:
@@ -253,16 +286,40 @@ def verify_findings(
             tool_choice=VERIFY_TOOL,
         )
         verdicts = _parse_verdicts(result)
-        for i, finding in enumerate(to_verify):
-            verdict = verdicts.get(i)
-            if verdict is None:
-                continue  # no verdict for this id -> not surfaced (filter-strict)
-            confidence = _calibrated(verdict, gate)
-            if confidence is None:
-                continue
-            verified_kept[id(finding)] = dataclasses.replace(
-                finding, confidence=confidence
+        if verdicts is None:
+            # The verifier produced NO usable verdict array (refusal, content
+            # filter, transport hiccup, or unparseable output). This is NOT the
+            # same as "the verifier vetted these and dropped them" — silently
+            # zeroing every HIGH/CRITICAL candidate on a single refusal would be
+            # a catastrophic recall failure. Fail SAFE: fall back to the finder's
+            # own confidence through the same gate (the cheaper-path policy), so
+            # genuine candidates still surface instead of vanishing. Log loudly
+            # so the unparseable/refused turn is never mistaken for "no issues".
+            _LOG.warning(
+                "verifier returned no usable verdicts for %d finding(s) "
+                "(refusal/content-filter/unparseable); falling back to finder "
+                "confidence through the gate (%.2f) instead of dropping all. "
+                "verifier_text=%r",
+                len(to_verify),
+                gate,
+                _result_text_preview(result),
             )
+            for finding in to_verify:
+                if finding.confidence >= gate:
+                    verified_kept[id(finding)] = finding
+        else:
+            for i, finding in enumerate(to_verify):
+                verdict = verdicts.get(i)
+                if verdict is None:
+                    # A real verdict array that omits this id -> not surfaced
+                    # (find-broad / filter-strict). This is an intentional drop.
+                    continue
+                confidence = _calibrated(verdict, gate)
+                if confidence is None:
+                    continue
+                verified_kept[id(finding)] = dataclasses.replace(
+                    finding, confidence=confidence
+                )
 
     # Recombine in the original finding order.
     kept: list[Finding] = []

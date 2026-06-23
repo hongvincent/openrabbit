@@ -16,6 +16,7 @@ line + a grouped, per-file findings table.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import Any, Optional
 
@@ -23,6 +24,8 @@ from openrabbit.adapters.github import build_review_comment
 from openrabbit.findings import Finding
 
 DEFAULT_EVENT = "COMMENT"
+
+_LOG = logging.getLogger("openrabbit.pipeline.emit")
 
 
 def render_summary_markdown(
@@ -111,12 +114,20 @@ def emit_github(
     walkthrough_markdown: Optional[str] = None,
     prior_threads: Optional[list[Any]] = None,
     resolve_stale: bool = True,
+    valid_positions: Optional[dict[str, set[tuple[str, int]]]] = None,
+    changed_files: Optional[set[str]] = None,
 ) -> dict[str, Any]:
     """Online emit via an injected :class:`GitHubAdapter`.
 
     Posts ONE advisory (event=COMMENT) review with all inline comments, upserts
     the sticky walkthrough comment, and (optionally) resolves+minimizes stale
     bot threads whose finding no longer appears.
+
+    **Diff-anchor validation:** ``valid_positions`` (from
+    :func:`openrabbit.pipeline.route.valid_positions_by_file`) and
+    ``changed_files`` are forwarded to :meth:`GitHubAdapter.post_review`, which
+    drops any finding whose path/line falls outside the real diff — so one
+    hallucinated position can't 422 the entire batched review.
 
     **Low-noise guard (SPEC 1.3 / 3 / principle 1):** when ``findings`` is empty
     (clean PR, or an incremental re-run where dedup suppressed everything), NO
@@ -130,8 +141,20 @@ def emit_github(
     """
     review: Optional[dict[str, Any]] = None
     if findings:
+        # Forward the diff-anchor validation maps only when supplied so adapters
+        # (and test fakes) with the legacy post_review signature keep working;
+        # the real GitHubAdapter accepts the optional kwargs.
+        extra: dict[str, Any] = {}
+        if valid_positions is not None:
+            extra["valid_positions"] = valid_positions
+        if changed_files is not None:
+            extra["changed_files"] = changed_files
         review = adapter.post_review(
-            findings, summary_markdown, commit_sha, event=DEFAULT_EVENT
+            findings,
+            summary_markdown,
+            commit_sha,
+            event=DEFAULT_EVENT,
+            **extra,
         )
     walkthrough = adapter.upsert_sticky_walkthrough(
         walkthrough_markdown or summary_markdown
@@ -147,7 +170,15 @@ def emit_github(
                 if thread.comment_id:
                     adapter.minimize_comment(thread.comment_id, "OUTDATED")
                 resolved.append(thread.thread_id)
-            except Exception:  # pragma: no cover - best-effort cleanup
+            except Exception as exc:
+                # Best-effort cleanup: a failed resolve/minimize must not abort
+                # the review, but it MUST be logged (not silently swallowed) so a
+                # persistently failing GraphQL call is diagnosable in CI logs.
+                _LOG.warning(
+                    "emit_github: failed to resolve/minimize stale thread %s: %s",
+                    thread.thread_id,
+                    exc,
+                )
                 continue
 
     return {

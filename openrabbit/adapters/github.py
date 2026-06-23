@@ -28,11 +28,15 @@ and every unit test that injects a fake client — needs ZERO external deps.
 
 from __future__ import annotations
 
+import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from openrabbit.findings import Finding
+
+_LOG = logging.getLogger("openrabbit.adapters.github")
 
 # Default GitHub endpoints. Overridable for GitHub Enterprise via the adapter
 # constructor; tests inject a fake client so these are never dialed in unit tests.
@@ -153,6 +157,21 @@ def _severity_badge(finding: Finding) -> str:
     return f"**[{finding.severity.upper()}/{finding.category}]**"
 
 
+def normalize_comment_path(path: str) -> str:
+    """Strip a model-echoed ``a/`` or ``b/`` git-diff prefix from a comment path.
+
+    The diff text the model reads carries ``a/<path>`` (old) and ``b/<path>``
+    (new) headers; an unreliable model sometimes echoes the ``b/`` (or ``a/``)
+    prefix into ``finding.file``. GitHub indexes changed files by their bare
+    repo-relative path, so a prefixed path would never match and the comment
+    would be rejected. Only a leading ``a/``/``b/`` is removed (a real path that
+    legitimately starts with ``b/...`` after a normal segment is untouched).
+    """
+    if path.startswith(("a/", "b/")):
+        return path[2:]
+    return path
+
+
 def build_review_comment(finding: Finding) -> dict[str, Any]:
     """Build one ``comments[]`` entry for the batched createReview call.
 
@@ -160,6 +179,13 @@ def build_review_comment(finding: Finding) -> dict[str, Any]:
     set ``start_line`` + ``start_side`` (GitHub anchors the comment on the *end*
     line). The body carries the title, rationale, an optional committable
     ```suggestion``` block, and a hidden fingerprint marker for later dedup.
+
+    Defensive normalization against an unreliable model:
+
+    * the path is run through :func:`normalize_comment_path` (echoed ``a/``/``b/``);
+    * a swapped multi-line range (``start_line > end_line``) is clamped so the
+      smaller endpoint is ``start_line`` and the larger is the ``line`` anchor —
+      GitHub 422s a review where ``start_line > line``.
     """
     lines = [f"{_severity_badge(finding)} {finding.title}", "", finding.body]
     if finding.suggestion:
@@ -167,14 +193,16 @@ def build_review_comment(finding: Finding) -> dict[str, Any]:
     lines += ["", fingerprint_marker(finding.fingerprint)]
     body = "\n".join(lines)
 
+    lo = min(finding.start_line, finding.end_line)
+    hi = max(finding.start_line, finding.end_line)
     comment: dict[str, Any] = {
-        "path": finding.file,
-        "line": finding.end_line,
+        "path": normalize_comment_path(finding.file),
+        "line": hi,
         "side": finding.side,
         "body": body,
     }
-    if finding.end_line != finding.start_line:
-        comment["start_line"] = finding.start_line
+    if hi != lo:
+        comment["start_line"] = lo
         comment["start_side"] = finding.side
     return comment
 
@@ -201,6 +229,8 @@ class GitHubAdapter:
         graphql_url: str = DEFAULT_GRAPHQL_URL,
         bot_login: Optional[str] = None,
         timeout: float = 30.0,
+        max_retries: int = 4,
+        sleep: Any = time.sleep,
     ) -> None:
         self.repo = repo
         self.pr_number = pr_number
@@ -211,6 +241,11 @@ class GitHubAdapter:
         self.graphql_url = graphql_url
         self.bot_login = bot_login
         self.timeout = timeout
+        # Bounded retry budget for GitHub primary/secondary rate limits
+        # (403/429 + Retry-After / X-RateLimit-Reset). ``sleep`` is injectable so
+        # unit tests exercise the backoff path without real wall-clock delay.
+        self.max_retries = max_retries
+        self._sleep = sleep
 
     # -- HTTP plumbing ------------------------------------------------------ #
     def _headers(self, accept: str = "application/vnd.github+json") -> dict[str, str]:
@@ -259,12 +294,97 @@ class GitHubAdapter:
     def _rest_url(self, path: str) -> str:
         return f"{self.api_base}{path}"
 
+    # -- rate-limit aware request layer ------------------------------------ #
+    # GitHub primary-rate (429) and secondary-rate (403 with X-RateLimit-Remaining:0
+    # or a "secondary rate limit" message) responses are transient. Hard-failing
+    # on the first one would lose an entire review. We retry idempotent reads and
+    # the single createReview POST with a bounded budget, honoring Retry-After /
+    # X-RateLimit-Reset when present.
+    _RATE_LIMIT_STATUSES = frozenset({403, 429})
+    _MAX_BACKOFF_SECONDS = 60.0
+
+    @staticmethod
+    def _is_rate_limited(resp: Any) -> bool:
+        status = getattr(resp, "status_code", 0)
+        if status == 429:
+            return True
+        if status != 403:
+            return False
+        headers = {k.lower(): v for k, v in dict(getattr(resp, "headers", {}) or {}).items()}
+        # Secondary rate limit: either an explicit Retry-After, a depleted
+        # X-RateLimit-Remaining, or a body that names the secondary limit.
+        if "retry-after" in headers:
+            return True
+        if headers.get("x-ratelimit-remaining") == "0":
+            return True
+        try:
+            message = str(resp.json().get("message", "")).lower()
+        except Exception:  # pragma: no cover - defensive
+            message = ""
+        return "secondary rate limit" in message or "rate limit" in message
+
+    def _retry_delay(self, resp: Any, attempt: int) -> float:
+        """Compute the backoff (seconds) for a rate-limited response.
+
+        Prefer the server's ``Retry-After`` (seconds) or ``X-RateLimit-Reset``
+        (epoch seconds) hint; otherwise fall back to exponential backoff. The
+        delay is bounded so a bogus header can't wedge the run.
+        """
+        headers = {k.lower(): v for k, v in dict(getattr(resp, "headers", {}) or {}).items()}
+        retry_after = headers.get("retry-after")
+        if retry_after is not None:
+            try:
+                return max(0.0, min(float(retry_after), self._MAX_BACKOFF_SECONDS))
+            except (TypeError, ValueError):
+                pass
+        reset = headers.get("x-ratelimit-reset")
+        if reset is not None:
+            try:
+                delta = float(reset) - time.time()
+                return max(0.0, min(delta, self._MAX_BACKOFF_SECONDS))
+            except (TypeError, ValueError):
+                pass
+        return min(2.0**attempt, self._MAX_BACKOFF_SECONDS)
+
+    def _request(self, method: str, url: str, action: str, **kw: Any) -> Any:
+        """Issue an HTTP request, retrying transient rate-limit responses.
+
+        ``method`` is ``get``/``post``/``patch``. On a 403/429 rate-limit
+        response the call is retried up to :attr:`max_retries` times with a
+        bounded, Retry-After-aware backoff; any other non-2xx response is left
+        for the caller's :meth:`_raise_for` to surface.
+        """
+        client = self._client()
+        call = getattr(client, method)
+        resp = call(url, **kw)
+        attempt = 0
+        while (
+            self._is_rate_limited(resp)
+            and attempt < self.max_retries
+        ):
+            delay = self._retry_delay(resp, attempt)
+            _LOG.warning(
+                "%s: GitHub rate limit (HTTP %s), retry %d/%d after %.1fs",
+                action,
+                getattr(resp, "status_code", "?"),
+                attempt + 1,
+                self.max_retries,
+                delay,
+            )
+            self._sleep(delay)
+            resp = call(url, **kw)
+            attempt += 1
+        return resp
+
     # -- REST: read PR ------------------------------------------------------ #
     def fetch_pr_diff(self) -> str:
         """Return the unified diff for the PR (``Accept: ...v3.diff``)."""
         url = self._rest_url(f"/repos/{self.repo.slug}/pulls/{self.pr_number}")
-        resp = self._client().get(
-            url, headers=self._headers("application/vnd.github.v3.diff")
+        resp = self._request(
+            "get",
+            url,
+            "fetch_pr_diff",
+            headers=self._headers("application/vnd.github.v3.diff"),
         )
         self._raise_for(resp, "fetch_pr_diff")
         return resp.text
@@ -272,7 +392,9 @@ class GitHubAdapter:
     def fetch_changed_files(self) -> list[ChangedFile]:
         """Return the PR's changed files as :class:`ChangedFile` objects."""
         url = self._rest_url(f"/repos/{self.repo.slug}/pulls/{self.pr_number}/files")
-        resp = self._client().get(url, headers=self._headers())
+        resp = self._request(
+            "get", url, "fetch_changed_files", headers=self._headers()
+        )
         self._raise_for(resp, "fetch_changed_files")
         return [
             ChangedFile(
@@ -286,6 +408,37 @@ class GitHubAdapter:
         ]
 
     # -- REST: post review (ONE call) -------------------------------------- #
+    @staticmethod
+    def _comment_is_in_diff(
+        comment: dict[str, Any],
+        valid_positions: Optional[dict[str, set[tuple[str, int]]]],
+        changed_files: Optional[set[str]],
+    ) -> bool:
+        """True if a built comment anchors on a real diff position.
+
+        Cross-checks the comment's file against ``changed_files`` (the PR's
+        actual filenames) and its ``(side, line)`` — and, for a multi-line
+        comment, ``(side, start_line)`` — against ``valid_positions`` (the set
+        derived from the parsed ``@@`` hunk ranges). When neither map is
+        supplied the check is a no-op (legacy callers keep the old behavior).
+        """
+        path = comment["path"]
+        if changed_files is not None and path not in changed_files:
+            return False
+        if valid_positions is None:
+            return True
+        allowed = valid_positions.get(path)
+        if not allowed:
+            return False
+        side = comment["side"]
+        if (side, comment["line"]) not in allowed:
+            return False
+        if "start_line" in comment:
+            start_side = comment.get("start_side", side)
+            if (start_side, comment["start_line"]) not in allowed:
+                return False
+        return True
+
     def post_review(
         self,
         findings: list[Finding],
@@ -293,6 +446,8 @@ class GitHubAdapter:
         commit_sha: str,
         *,
         event: str = "COMMENT",
+        valid_positions: Optional[dict[str, set[tuple[str, int]]]] = None,
+        changed_files: Optional[set[str]] = None,
     ) -> dict[str, Any]:
         """Post ONE batched review with all inline comments + a summary body.
 
@@ -300,21 +455,64 @@ class GitHubAdapter:
         ``REQUEST_CHANGES`` / ``DISMISS`` raise :class:`GitHubError`. The single
         ``POST /repos/{o}/{r}/pulls/{n}/reviews`` carries ``comments[]`` with
         committable suggestion blocks and correct line/side anchoring.
+
+        **Diff-anchor validation (CRITICAL):** ``valid_positions`` maps each
+        changed file to its valid ``{(side, line)}`` anchor set (see
+        :func:`openrabbit.pipeline.route.valid_positions_by_file`) and
+        ``changed_files`` is the PR's real filename set. Findings whose path or
+        ``(side, line)`` falls outside the diff are DROPPED before the POST —
+        otherwise a single hallucinated position would 422 the entire batch and
+        post zero comments. If every comment is filtered out, no review is fired
+        (``{"skipped": True}`` is returned). As a last-resort guard, a 422 from
+        GitHub triggers ONE retry of the same POST without inline comments so the
+        summary review still lands instead of being lost.
         """
         if event in _FORBIDDEN_EVENTS or event not in _ALLOWED_EVENTS:
             raise GitHubError(
                 f"advisory-only adapter refuses review event {event!r}; "
                 f"only {sorted(_ALLOWED_EVENTS)} is permitted"
             )
-        comments = [build_review_comment(f) for f in findings]
-        payload = {
-            "commit_id": commit_sha,
-            "event": event,
-            "body": summary_markdown,
-            "comments": comments,
-        }
+        built = [(f, build_review_comment(f)) for f in findings]
+        comments: list[dict[str, Any]] = []
+        for finding, comment in built:
+            if self._comment_is_in_diff(comment, valid_positions, changed_files):
+                comments.append(comment)
+            else:
+                _LOG.warning(
+                    "post_review: dropping out-of-diff finding %s at %s:%s (side=%s)",
+                    finding.fingerprint,
+                    comment["path"],
+                    comment["line"],
+                    comment["side"],
+                )
+
+        # Low-noise guard: if validation filtered out every inline comment AND
+        # there were inline findings to begin with, do not fire an empty review.
+        if findings and not comments:
+            return {"skipped": True}
+
         url = self._rest_url(f"/repos/{self.repo.slug}/pulls/{self.pr_number}/reviews")
-        resp = self._client().post(url, headers=self._headers(), json=payload)
+
+        def _post(payload_comments: list[dict[str, Any]]) -> Any:
+            payload = {
+                "commit_id": commit_sha,
+                "event": event,
+                "body": summary_markdown,
+                "comments": payload_comments,
+            }
+            return self._request(
+                "post", url, "post_review", headers=self._headers(), json=payload
+            )
+
+        resp = _post(comments)
+        # Belt-and-suspenders: a server-side 422 on a comment position must not
+        # nuke the whole review. Retry ONCE without inline comments so the
+        # summary review still lands (the offending lines are simply not posted).
+        if getattr(resp, "status_code", 0) == 422 and comments:
+            _LOG.warning(
+                "post_review: GitHub 422 on inline comments; retrying summary-only"
+            )
+            resp = _post([])
         self._raise_for(resp, "post_review")
         return resp.json()
 

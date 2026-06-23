@@ -2009,8 +2009,12 @@ class TestVerifyEdges:
     def _finding(self):
         return _finding(0.9, rule="r")
 
-    def test_missing_tool_call_drops(self):
-        # No batch verdict array at all -> every verified finding drops.
+    def test_missing_tool_call_falls_back_not_silent_drop(self):
+        # No verify_findings tool call at all (e.g. a refusal) is NOT a "verified
+        # and dropped" signal — silently zeroing every HIGH/CRITICAL candidate on
+        # one refusal is a catastrophic recall failure. Fail SAFE: fall back to
+        # the finder's own confidence through the gate. The finding here is 0.9 >=
+        # gate 0.8, so it must SURVIVE rather than vanish.
         result = CompletionResult(
             text="no tool",
             tool_calls=[],
@@ -2018,7 +2022,21 @@ class TestVerifyEdges:
             usage=Usage(),
         )
         verifier = FakeProvider([result])
-        assert verify_mod.verify_findings(verifier, [self._finding()], gate=0.8) == []
+        kept = verify_mod.verify_findings(verifier, [self._finding()], gate=0.8)
+        assert [f.rule_id for f in kept] == ["r"]
+
+    def test_missing_tool_call_fallback_still_applies_gate(self):
+        # The fail-safe fallback is to finder confidence THROUGH the gate, not an
+        # unconditional keep: a below-gate finder confidence still drops.
+        result = CompletionResult(
+            text="no tool",
+            tool_calls=[],
+            finish_reason=FinishReason.STOP,
+            usage=Usage(),
+        )
+        verifier = FakeProvider([result])
+        low = _finding(0.50, rule="low")
+        assert verify_mod.verify_findings(verifier, [low], gate=0.8) == []
 
     def test_non_numeric_confidence_drops(self):
         # A verdict whose confidence is non-numeric drops that finding.
@@ -2058,8 +2076,10 @@ class TestVerifyEdges:
             usage=Usage(),
         )
 
-    def test_verdicts_not_a_list_drops_all(self):
-        # Malformed model output: 'verdicts' isn't an array -> every finding drops.
+    def test_verdicts_not_a_list_falls_back_not_silent_drop(self):
+        # Malformed model output: 'verdicts' isn't an array -> unparseable, NOT a
+        # real "drop these" answer. Same fail-safe as a missing tool call: fall
+        # back to finder confidence through the gate rather than zero everything.
         result = CompletionResult(
             text="",
             tool_calls=[
@@ -2069,7 +2089,8 @@ class TestVerifyEdges:
             usage=Usage(),
         )
         verifier = FakeProvider([result])
-        assert verify_mod.verify_findings(verifier, [self._finding()], gate=0.8) == []
+        kept = verify_mod.verify_findings(verifier, [self._finding()], gate=0.8)
+        assert [f.rule_id for f in kept] == ["r"]
 
     def test_non_dict_verdict_item_skipped(self):
         verifier = FakeProvider([self._batch_tool(["not-a-dict"])])
@@ -2109,17 +2130,41 @@ class TestVerifySchemaStrictness:
         import jsonschema
 
         validator = jsonschema.Draft202012Validator(verify_mod._VERIFY_SCHEMA)
-        good = {"verdicts": [{"id": 0, "keep": True, "confidence": 0.9}]}
+        # Under OpenAI strict mode every property (incl. the now-nullable
+        # `rationale`) is required, so a well-formed verdict carries it.
+        good = {
+            "verdicts": [
+                {"id": 0, "keep": True, "confidence": 0.9, "rationale": "ok"}
+            ]
+        }
         assert list(validator.iter_errors(good)) == []
 
+        # `rationale` is nullable: an explicit null still validates.
+        good_null = {
+            "verdicts": [
+                {"id": 0, "keep": True, "confidence": 0.9, "rationale": None}
+            ]
+        }
+        assert list(validator.iter_errors(good_null)) == []
+
         extra_top = {
-            "verdicts": [{"id": 0, "keep": True, "confidence": 0.9}],
+            "verdicts": [
+                {"id": 0, "keep": True, "confidence": 0.9, "rationale": "ok"}
+            ],
             "surprise": 1,
         }
         assert list(validator.iter_errors(extra_top))
 
         extra_verdict = {
-            "verdicts": [{"id": 0, "keep": True, "confidence": 0.9, "injected": "x"}]
+            "verdicts": [
+                {
+                    "id": 0,
+                    "keep": True,
+                    "confidence": 0.9,
+                    "rationale": "ok",
+                    "injected": "x",
+                }
+            ]
         }
         assert list(validator.iter_errors(extra_verdict))
 
