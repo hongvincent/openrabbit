@@ -33,7 +33,7 @@ import json
 import logging
 from typing import Any, Optional
 
-from openrabbit.domain import Message, ToolSpec
+from openrabbit.domain import FinishReason, Message, ToolSpec
 from openrabbit.findings import SEVERITIES, Finding
 from openrabbit.providers.base import Provider, ProviderError
 
@@ -46,8 +46,23 @@ DEFAULT_VERIFY_MIN_SEVERITY = "high"
 # huge batch can't blow the budget. Each verdict is small (keep + score + short
 # rationale), so a modest per-finding allotment is plenty.
 PER_FINDING_TOKENS = 160
-MIN_VERIFY_MAX_TOKENS = 512
-MAX_VERIFY_MAX_TOKENS = 4096
+# The verifier's ``max_tokens`` is its TOTAL output budget. When the verifier
+# runs with reasoning ON (the shipped GPT verifier uses ``reasoning_effort:
+# medium``), the model's (billed) reasoning tokens are drawn from this SAME
+# budget BEFORE the verify_findings tool call. A tiny floor (the old 512) is
+# entirely consumable by reasoning, so the turn returns ``max_output_tokens`` /
+# FinishReason.MAX_TOKENS with ZERO verdicts — and the soft-skip then posts
+# UN-verified findings. So the base floor is raised for headroom, and when the
+# caller declares the verifier's reasoning effort the floor is lifted further to
+# fund the reasoning AND leave room for the verdicts.
+MIN_VERIFY_MAX_TOKENS = 2048
+#: Floor used when the verifier runs with reasoning ON (any non-disable effort).
+#: Sized to fund medium-effort reasoning and still emit the verdict array.
+MIN_REASONING_VERIFY_MAX_TOKENS = 6144
+# Disable sentinels for the verifier reasoning-effort hint (mirrors the Converse
+# adapter): these mean reasoning is OFF, so the smaller base floor applies.
+_REASONING_DISABLE_VALUES: frozenset[str] = frozenset({"none", "off", ""})
+MAX_VERIFY_MAX_TOKENS = 16384
 # Files at this risk get a recall-recovery nudge (verifier is told to be
 # thorough rather than dismissive); see SPEC 6.5.
 HIGH_RISK = "high"
@@ -127,10 +142,27 @@ def _should_verify(finding: Finding, min_rank: int) -> bool:
     return _severity_rank(finding.severity) <= min_rank
 
 
-def _batch_max_tokens(n: int) -> int:
-    """Token budget for a verifier batch of ``n`` findings (clamped)."""
+def _reasoning_is_on(verifier_reasoning_effort: Optional[str]) -> bool:
+    """True when the verifier's declared reasoning effort enables thinking.
+
+    ``None`` / ``"none"`` / ``"off"`` / ``""`` (case-insensitively) mean reasoning
+    is OFF; any other non-empty value (``"low"``/``"medium"``/``"high"``) is ON.
+    """
+    if verifier_reasoning_effort is None:
+        return False
+    return str(verifier_reasoning_effort).strip().lower() not in _REASONING_DISABLE_VALUES
+
+
+def _batch_max_tokens(n: int, *, reasoning: bool = False) -> int:
+    """Token budget for a verifier batch of ``n`` findings (clamped).
+
+    When ``reasoning`` is True the floor is raised to
+    :data:`MIN_REASONING_VERIFY_MAX_TOKENS` so the verifier's (billed) reasoning
+    tokens don't starve the verdict array (item 1).
+    """
+    floor = MIN_REASONING_VERIFY_MAX_TOKENS if reasoning else MIN_VERIFY_MAX_TOKENS
     want = PER_FINDING_TOKENS * max(1, n)
-    return max(MIN_VERIFY_MAX_TOKENS, min(MAX_VERIFY_MAX_TOKENS, want))
+    return max(floor, min(MAX_VERIFY_MAX_TOKENS, want))
 
 
 def _build_prompt(findings: list[Finding], high_risk: bool) -> str:
@@ -250,6 +282,7 @@ def verify_findings(
     min_severity: str = DEFAULT_VERIFY_MIN_SEVERITY,
     high_risk_files: Optional[set[str]] = None,
     max_tokens: Optional[int] = None,
+    verifier_reasoning_effort: Optional[str] = None,
 ) -> list[Finding]:
     """Verify a batch of findings; return only those that pass the gate.
 
@@ -262,6 +295,14 @@ def verify_findings(
     ``high_risk_files`` is an optional set of paths that trigger the
     recall-recovery nudge in the verifier prompt when any verified finding lives
     in one of them.
+
+    ``verifier_reasoning_effort`` is the verifier role's configured reasoning
+    effort (``"low"``/``"medium"``/``"high"`` or a disable sentinel). When the
+    caller (the orchestrator) declares it AND no explicit ``max_tokens`` is
+    given, the per-batch budget floor is raised to fund the verifier's (billed)
+    reasoning tokens so a reasoning verifier doesn't run out of budget mid-thought
+    and return zero verdicts (item 1). It is a budget hint only — the effort
+    itself reaches the verifier via its role options on ``complete()``.
     """
     if not findings:
         return []
@@ -281,7 +322,12 @@ def verify_findings(
     if to_verify:
         high_risk = any(f.file in high_risk_files for f in to_verify)
         budget = (
-            max_tokens if max_tokens is not None else _batch_max_tokens(len(to_verify))
+            max_tokens
+            if max_tokens is not None
+            else _batch_max_tokens(
+                len(to_verify),
+                reasoning=_reasoning_is_on(verifier_reasoning_effort),
+            )
         )
         user = Message(role="user", content=_build_prompt(to_verify, high_risk))
         try:
@@ -321,22 +367,43 @@ def verify_findings(
         else:
             verdicts = _parse_verdicts(result)
             if verdicts is None:
-                # The verifier produced NO usable verdict array (refusal, content
-                # filter, or unparseable output). This is NOT the same as "the
-                # verifier vetted these and dropped them" — silently zeroing every
-                # HIGH/CRITICAL candidate on a single refusal would be a
-                # catastrophic recall failure. Log loudly so the unparseable/
-                # refused turn is never mistaken for "no issues"; the shared
-                # fallback below keeps genuine candidates.
-                _LOG.warning(
-                    "verifier returned no usable verdicts for %d finding(s) "
-                    "(refusal/content-filter/unparseable); falling back to finder "
-                    "confidence through the gate (%.2f) instead of dropping all. "
-                    "verifier_text=%r",
-                    len(to_verify),
-                    gate,
-                    _result_text_preview(result),
-                )
+                # The verifier produced NO usable verdict array. This is NOT the
+                # same as "the verifier vetted these and dropped them" — silently
+                # zeroing every HIGH/CRITICAL candidate on a single empty turn
+                # would be a catastrophic recall failure. The shared fallback
+                # below keeps genuine candidates; here we log loudly, but
+                # DISTINGUISHING the two ways a turn comes back empty:
+                #
+                #   * finish_reason == MAX_TOKENS  -> the budget ran out mid-turn
+                #     (reasoning starvation): the verifier likely never got to the
+                #     verify_findings tool call. This is OBSERVABLE and ACTIONABLE
+                #     (raise the verifier budget / lower its reasoning effort), so
+                #     it must NOT be buried in the generic refusal vocabulary.
+                #   * otherwise (STOP/etc.) -> refusal / content-filter /
+                #     unparseable output.
+                if getattr(result, "finish_reason", None) is FinishReason.MAX_TOKENS:
+                    _LOG.warning(
+                        "verifier returned no usable verdicts for %d finding(s) "
+                        "because the turn hit its token BUDGET (finish_reason="
+                        "max_tokens) — likely reasoning-starved before emitting "
+                        "verdicts; raise the verifier max_tokens budget or lower "
+                        "its reasoning effort. Falling back to finder confidence "
+                        "through the gate (%.2f) instead of dropping all. "
+                        "verifier_text=%r",
+                        len(to_verify),
+                        gate,
+                        _result_text_preview(result),
+                    )
+                else:
+                    _LOG.warning(
+                        "verifier returned no usable verdicts for %d finding(s) "
+                        "(refusal/content-filter/unparseable); falling back to "
+                        "finder confidence through the gate (%.2f) instead of "
+                        "dropping all. verifier_text=%r",
+                        len(to_verify),
+                        gate,
+                        _result_text_preview(result),
+                    )
 
         if verdicts is None:
             # Fail SAFE (shared by the ProviderError and refusal/empty paths):

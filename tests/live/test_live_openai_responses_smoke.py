@@ -1,4 +1,4 @@
-"""Live smoke: OpenAIResponsesAdapter (GPT-5.5) against REAL Bedrock mantle.
+"""Live smoke: OpenAIResponsesAdapter (GPT-5.4) against REAL Bedrock mantle.
 
 This is the single most important live test: it validates the Phase-A strict-
 schema + bearer-auth fixes against reality. It proves, on a real call:
@@ -25,13 +25,16 @@ from openrabbit.pipeline.run_lenses import EMIT_FINDINGS_TOOL, emit_findings_too
 from openrabbit.pipeline.verify import VERIFY_TOOL, _verify_tool
 from openrabbit.providers.openai_responses import OpenAIResponsesAdapter
 
-from .conftest import GPT_REGION
+from .conftest import GPT_MODEL, GPT_REGION
 
 
 @pytest.mark.live
 def test_live_openai_responses_plain_smoke(bearer_token: str) -> None:
     """Bearer auth + transport + message-text parsing on a tiny no-tools call."""
-    adapter = OpenAIResponsesAdapter(region=GPT_REGION)
+    # Pin the SHIPPED verifier model id explicitly so the live gate exercises the
+    # model production runs (not the adapter's DEFAULT_MODEL), keeping this smoke
+    # in lock-step with .openrabbit.yaml's verifier role.
+    adapter = OpenAIResponsesAdapter(model=GPT_MODEL, region=GPT_REGION)
 
     result = adapter.complete(
         system="You are a terse assistant. Answer in one short word.",
@@ -43,7 +46,7 @@ def test_live_openai_responses_plain_smoke(bearer_token: str) -> None:
     )
 
     # No HTTP 401/400 reaching here proves bearer auth + request shape are valid.
-    assert result.text.strip(), "expected non-empty GPT-5.5 text (bearer auth ok)"
+    assert result.text.strip(), "expected non-empty GPT-5.4 text (bearer auth ok)"
     # Real usage keys (input_tokens) exist on the wire and parse to > 0.
     assert result.usage.input_tokens > 0, (
         "usage.input_tokens must be > 0 — proves the Responses 'input_tokens' key "
@@ -60,7 +63,7 @@ def test_live_openai_responses_emit_findings_strict(bearer_token: str) -> None:
     (:func:`run_lenses.run_lens`). A real HTTP 400 here would mean the strict
     schema is malformed for the live endpoint (the Phase-A regression class).
     """
-    adapter = OpenAIResponsesAdapter(region=GPT_REGION)
+    adapter = OpenAIResponsesAdapter(model=GPT_MODEL, region=GPT_REGION)
 
     diff = (
         "diff --git a/auth.py b/auth.py\n"
@@ -111,7 +114,7 @@ def test_live_openai_responses_verify_findings_strict(bearer_token: str) -> None
     Mirrors :func:`verify.verify_findings`: forces the batched verifier tool with
     its strict verdict-array schema and a tiny UNTRUSTED findings payload.
     """
-    adapter = OpenAIResponsesAdapter(region=GPT_REGION)
+    adapter = OpenAIResponsesAdapter(model=GPT_MODEL, region=GPT_REGION)
 
     user = Message(
         role="user",

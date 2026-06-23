@@ -39,6 +39,13 @@ from openrabbit.providers.base import Provider
 
 EMIT_FINDINGS_TOOL = "emit_findings"
 DEFAULT_FINDER_MAX_TOKENS = 4096
+# When a lens runs with reasoning ON, the (billed) reasoning tokens are drawn
+# from the SAME output budget as the emit_findings tool call. AWS recommends a
+# generous ``maxTokens`` even for LOW effort (>= 15000) so the model has room to
+# think AND still emit findings — a 4096 budget can be entirely consumed by
+# reasoning, truncating before any findings are emitted (silent recall loss).
+# Non-reasoning lenses keep the small ``DEFAULT_FINDER_MAX_TOKENS``.
+REASONING_FINDER_MAX_TOKENS = 15000
 
 # JSON Schema for the forced emit_findings tool input (matches the finding
 # wire contract minus the harness-computed fingerprint).
@@ -214,13 +221,18 @@ def run_lens(
         )
     system = f"{prefix}\n\n--- LENS: {lens_name} ---\n{lens_prompt}"
     opts: dict[str, Any] = {"tool_choice": EMIT_FINDINGS_TOOL}
+    effective_max_tokens = max_tokens
     if reasoning_effort is not None:
         opts["reasoning_effort"] = reasoning_effort
+        # Reasoning ON: raise the budget to the reasoning floor so (billed)
+        # reasoning tokens don't starve the emit_findings call and truncate the
+        # pass. ``max`` so an explicit higher caller budget is never lowered.
+        effective_max_tokens = max(max_tokens, REASONING_FINDER_MAX_TOKENS)
     result = finder.complete(
         system,
         [file_message],
         [emit_findings_tool_spec()],
-        max_tokens,
+        effective_max_tokens,
         cache_prefix,
         **opts,
     )
