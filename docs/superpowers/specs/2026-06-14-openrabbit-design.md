@@ -30,7 +30,7 @@
 
 ## 2. Background
 
-Current baseline (`an-internal-repo/.github/workflows/pr-code-review.yml`): a single GitHub Action makes **one** Bedrock GPT-5.5 call with a 30k-char-truncated diff and posts **one Korean markdown summary comment**. Gaps: no inline comments, no repo-wide context, no incremental review, no memory/learnings, no chat, no false-positive gating, not reusable across repos.
+Current baseline (an internal repo's `.github/workflows/pr-code-review.yml`): a single GitHub Action makes **one** Bedrock GPT-5.5 call with a 30k-char-truncated diff and posts **one Korean markdown summary comment**. Gaps: no inline comments, no repo-wide context, no incremental review, no memory/learnings, no chat, no false-positive gating, not reusable across repos.
 
 openrabbit closes every one of those gaps while being **deliberately low-noise** — the lesson big tech codified (Google Tricorder's <10% effective-FP bar; Meta's "don't burden the reviewer"; the industry step-function where >10% FP → "noisy" → >30% → dismissed-by-default and irrecoverable). Untuned LLM reviewers start at **40–80% FP**, so confidence gating + eval is the product, not a feature.
 
@@ -243,7 +243,7 @@ openrabbit/
 ## 14. Phased Roadmap
 | Phase | Scope | Exit criteria |
 |------|-------|---------------|
-| **0 · Dogfood core** | findings contract + `.openrabbit.yaml` v0 · pipeline skeleton · 2 lenses (correctness, security) on Nova-finder→GPT-5.5-verify · GitHub adapter (createReview + sticky walkthrough) · **eval harness v0** on `an-internal-repo` | FP < 10% on golden set; inline review posts correctly |
+| **0 · Dogfood core** | findings contract + `.openrabbit.yaml` v0 · pipeline skeleton · 2 lenses (correctness, security) on Nova-finder→GPT-5.5-verify · GitHub adapter (createReview + sticky walkthrough) · **eval harness v0** on an internal dogfood repo | FP < 10% on golden set; inline review posts correctly |
 | **1 · Action packaging** | Action-first + `.openrabbit.yaml` full · inline committable suggestions · incremental + dedup/auto-resolve (GraphQL) · remaining lenses | clean incremental reviews, no duplicate comments |
 | **2 · Trust & cost** | learnings/memory + feedback loop · GPT-5.5 verifier formalized · caching + model routing tuned | action-rate up, cost < target/PR |
 | **3 · Onboarding & skillification** | `gh openrabbit init` · private marketplace · org ruleset governance | new repo onboarded in one command |
