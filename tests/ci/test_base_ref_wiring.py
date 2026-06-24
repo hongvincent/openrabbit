@@ -162,6 +162,47 @@ def test_base_branch_is_fetched_before_review(path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("path", REVIEW_RUNNERS)
+def test_base_branch_fetch_is_authenticated(path: Path) -> None:
+    """The base-branch fetch must authenticate with the job token.
+
+    The checkout runs with ``persist-credentials: false`` (hardening), so the git
+    credential helper is stripped after checkout. A bare ``git fetch origin`` then
+    has NO credential and FAILS on PRIVATE consumer repos ("could not read
+    Username for 'https://github.com'", exit 128) — anonymous fetch is rejected.
+    The fetch step must inject the job token via an http auth header (e.g. one-shot
+    env-based ``GIT_CONFIG_* http.extraheader`` — NOT persisted to ``.git/config``,
+    so the checked-out PR code cannot read the token).
+    """
+    tree = _load_yaml(path)
+    steps = _job_steps_running(tree, "openrabbit review")
+    assert steps, f"{path.name}: no step runs `openrabbit review`"
+
+    fetch_step = None
+    for step in steps:
+        run = step.get("run")
+        if isinstance(run, str) and re.search(
+            r"git\s+fetch\s+(?:--\S+\s+)*origin", run
+        ):
+            fetch_step = step
+            break
+    assert fetch_step is not None, f"{path.name}: no `git fetch origin` step"
+
+    run = fetch_step.get("run", "")
+    env = fetch_step.get("env", {}) or {}
+    blob = run + " " + " ".join(f"{k}={v}" for k, v in env.items())
+
+    assert re.search(r"github\.token|GITHUB_TOKEN", blob), (
+        f"{path.name}: the base-branch fetch does not reference the job token — "
+        "it will fail on private consumer repos (anonymous fetch is rejected)"
+    )
+    assert re.search(r"extraheader|AUTHORIZATION|x-access-token", blob, re.I), (
+        f"{path.name}: the base-branch fetch token is not wired into an http auth "
+        "header (extraheader/AUTHORIZATION) — a bare `git fetch` has no credential "
+        "helper after persist-credentials:false and 128s on private repos"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # (3) the base ref derives from the GitHub PR base, not a hard-coded branch     #
 # --------------------------------------------------------------------------- #
