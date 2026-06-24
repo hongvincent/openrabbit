@@ -231,6 +231,30 @@ def test_review_job_installs_openrabbit(path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("path", [REUSABLE_WORKFLOW, COMPOSITE_ACTION])
+def test_review_run_is_isolated_from_consumer_project(path: Path) -> None:
+    """The openrabbit review ``uv run`` must ignore the consumer repo's project.
+
+    The review runs from the checked-out consumer repo's working dir, so a bare
+    ``uv run --with git+...openrabbit`` makes uv adopt the CONSUMER's pyproject
+    and its ``requires-python`` — which can conflict with the workflow's pinned
+    Python (observed live: consumer ``requires-python >=3.13`` vs runner 3.12 ->
+    ``uv`` aborts before openrabbit ever starts). openrabbit is a TOOL, not a
+    consumer dependency, so the invocation must pass ``--no-project`` (or
+    ``--isolated``) to run in an ephemeral env decoupled from the consumer's
+    project metadata.
+    """
+    text = path.read_text(encoding="utf-8")
+    assert re.search(r"--with\s+git\+https://\S*openrabbit", text), (
+        f"{path.name}: no `uv run --with git+...openrabbit` invocation"
+    )
+    assert re.search(r"--no-project|--isolated", text), (
+        f"{path.name}: the openrabbit review `uv run` must use --no-project (or "
+        "--isolated) so the consumer repo's pyproject/requires-python cannot "
+        "constrain the tool's ephemeral env (live: consumer >=3.13 vs runner 3.12)"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # (c) MEDIUM: the review command engages the bot-login author filter           #
 # --------------------------------------------------------------------------- #
