@@ -210,7 +210,7 @@ jobs:
           fi
           uv run \
             --no-project \
-            --with git+https://github.com/hongvincent/openrabbit@eb27df197972200758b008d89dffba51db742225 \
+            --with git+https://github.com/hongvincent/openrabbit@99fc22887f237099fd2acfdda553834f977dfb44 \
             openrabbit review \
             --repo "$OR_REPO" \
             --pr "$OR_PR" \
