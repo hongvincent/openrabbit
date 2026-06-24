@@ -7,4 +7,9 @@ __pycache__/
 .coverage
 htmlcov/
 .pytest_cache/
-.claude/*.lock
+
+# Local AI-assistant / agent workspace — NEVER commit (session handoffs, ledgers,
+# memory, scratchpad, settings can leak internal process/info to a public repo).
+.claude/
+# Local session-notes dropped at repo root (date-prefixed working files).
+/[0-9][0-9][0-9][0-9]-*.txt
