@@ -167,7 +167,7 @@ jobs:
       # bakes the region into the token's SigV4 scope, so a token minted for the
       # Nova region (e.g. ap-northeast-2 Seoul) is rejected by the mantle
       # endpoint (401).
-      - name: Mint Bedrock bearer token (GPT-5.4/5.5 verifier)
+      - name: Mint Bedrock bearer token (GPT verifier)
         env:
           OR_VERIFIER_REGION: ${{ inputs.verifier_region }}
         run: |
