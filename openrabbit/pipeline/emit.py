@@ -37,6 +37,9 @@ _LOG = logging.getLogger("openrabbit.pipeline.emit")
 #: ``stat_keys`` localizes the per-PR stats-line keys (reviewable files/raw/kept).
 _SUMMARY_STRINGS: dict[str, dict[str, Any]] = {
     "en": {
+        # Standalone heading word (the inline review body). Localized + branded
+        # (🐰) only when persona is ON; see ``render_summary_markdown``.
+        "heading": "openrabbit review",
         "no_issues": "No issues found above the confidence gate. ✅",
         "found": "Found **{n}** issue(s) above the confidence gate.",
         "table_header": "| Severity | Category | File | Line | Finding |",
@@ -47,8 +50,11 @@ _SUMMARY_STRINGS: dict[str, dict[str, Any]] = {
         },
     },
     "ko": {
+        # Natural Korean ("리뷰" = the standard loanword for "review"), never the
+        # literal English "openrabbit review".
+        "heading": "openrabbit 리뷰",
         "no_issues": "신뢰도 기준을 넘는 문제가 발견되지 않았습니다. ✅",
-        "found": "신뢰도 기준을 넘는 문제 **{n}**건을 발견했습니다.",
+        "found": "신뢰도 기준을 넘는 문제 **{n}**건을 찾았어요.",
         "table_header": "| 심각도 | 카테고리 | 파일 | 라인 | 발견 사항 |",
         "stat_keys": {
             "reviewable files": "검토 대상 파일",
@@ -57,6 +63,10 @@ _SUMMARY_STRINGS: dict[str, dict[str, Any]] = {
         },
     },
 }
+
+#: Branding marker (kept in sync with ``walkthrough._RABBIT``). Only rendered on
+#: the standalone heading when ``persona`` is ON.
+_RABBIT = "🐰"
 
 
 def _summary_strings(response_language: str) -> dict[str, Any]:
@@ -69,22 +79,44 @@ def render_summary_markdown(
     *,
     stats: Optional[Mapping[str, Any]] = None,
     response_language: str = "en",
+    heading: bool = True,
+    persona: bool = True,
 ) -> str:
-    """Render the sticky walkthrough markdown: summary + grouped findings table.
+    """Render the findings summary markdown: a heading + count + grouped table.
 
-    ``response_language`` (default ``"en"``) localizes the count line, the
-    "no issues" line, the table header, and the stats-line keys. ``"en"`` is
-    byte-identical to the pre-feature output.
+    ``response_language`` (default ``"en"``) localizes the heading word, the
+    count line, the "no issues" line, the table header, and the stats-line keys.
+
+    ``heading`` (default ``True``) controls the standalone ``## …`` heading. It
+    is the natural single heading for the inline-review BODY (this function's
+    standalone use). When embedded inside
+    :func:`openrabbit.pipeline.walkthrough.build_walkthrough` — which already
+    emits its own localized "Findings"/"발견 사항" heading right above — the caller
+    passes ``heading=False`` so we don't DOUBLE-head; only the localized count
+    line (and table) is rendered.
+
+    ``persona`` (default ``True``) gates the 🐰 marker on the standalone heading
+    (branding appears only when persona is ON); ignored when ``heading`` is
+    ``False``. With ``persona=False`` the heading is the plain localized word.
     """
     stats = stats or {}
     strings = _summary_strings(response_language)
-    if not findings:
-        header = "## openrabbit review\n\n" + strings["no_issues"]
-        if stats:
-            header += "\n\n" + _stats_line(stats, strings["stat_keys"])
-        return header
+    head_line = None
+    if heading:
+        word = strings["heading"]
+        head_line = f"## {_RABBIT} {word}" if persona else f"## {word}"
 
-    lines = ["## openrabbit review", ""]
+    if not findings:
+        parts = [head_line] if head_line is not None else []
+        parts.append(strings["no_issues"])
+        body = "\n\n".join(parts)
+        if stats:
+            body += "\n\n" + _stats_line(stats, strings["stat_keys"])
+        return body
+
+    lines: list[str] = []
+    if head_line is not None:
+        lines += [head_line, ""]
     lines.append(strings["found"].format(n=len(findings)))
     if stats:
         lines += ["", _stats_line(stats, strings["stat_keys"])]

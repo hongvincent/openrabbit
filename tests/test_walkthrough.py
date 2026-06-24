@@ -630,7 +630,10 @@ class TestResponseLanguageLabels:
         # And Korean labels must appear (heading + the changed-files section).
         assert "변경된 파일" in md  # "Changed files"
         assert "## Walkthrough" not in md  # heading is localized too
-        assert "워크스루" in md or "검토 요약" in md
+        # The ko "Walkthrough" label is now the natural "둘러보기" (was the awkward
+        # transliteration "워크스루"); pin the natural copy.
+        assert "둘러보기" in md
+        assert "워크스루" not in md
 
     def test_ko_localizes_findings_table_header(self):
         plans = [_file_plan("src/api/auth.py")]
@@ -673,13 +676,19 @@ class TestPersonaBranding:
         assert "Walkthrough" in heading
 
     def test_default_output_has_sign_off(self):
-        # A short rabbit-flavored sign-off line at the END of the walkthrough.
+        # A short, casual rabbit-flavored sign-off near the END, followed by a
+        # small italic "made by Subin Hong" attribution as the closing line.
         plans = [_file_plan("src/api/auth.py")]
         md = wt.build_walkthrough({"title": "X"}, plans, [_finding()])
-        # 🐰 also rides on the sign-off; the sign-off is the closing content.
-        assert md.count("🐰") >= 2  # header marker + sign-off marker
-        last_nonblank = [ln for ln in md.splitlines() if ln.strip()][-1]
-        assert "🐰" in last_nonblank
+        # 🐰 also rides on the sign-off (header marker + sign-off marker).
+        assert md.count("🐰") >= 2
+        nonblank = [ln for ln in md.splitlines() if ln.strip()]
+        # The attribution is the closing line; the 🐰 sign-off sits just above it.
+        assert nonblank[-1] == "_made by Subin Hong_"
+        assert "🐰" in nonblank[-2]
+        # The casual sign-off copy (not the old stiff "Reviewed by … hop on by").
+        assert "hopped through your changes" in nonblank[-2]
+        assert "ping me anytime" in nonblank[-2]
 
     def test_persona_off_is_plain(self):
         # persona=False → NO 🐰 anywhere and NO sign-off; plain neutral output.
@@ -690,16 +699,28 @@ class TestPersonaBranding:
         assert "## Walkthrough" in md
 
     def test_persona_off_is_byte_identical_to_pre_feature(self):
-        # With persona disabled, output must be byte-identical to the original
-        # (un-branded) walkthrough — i.e. branding is purely additive when ON.
+        # With persona disabled, output carries NONE of the Feature-2 branding —
+        # branding (🐰 / ASCII art / sign-off / attribution) is purely additive
+        # when persona is ON.
         plans = [
             _file_plan("src/api/auth.py"),
             _file_plan("tests/test_auth.py", file_type="test"),
         ]
         plain = wt.build_walkthrough({"title": "X"}, plans, [_finding()], persona=False)
-        # No emoji, no sign-off markers leaked into the plain rendering.
+        # No emoji, no sign-off, no ASCII art, no attribution leaked in.
         assert "🐰" not in plain
-        assert "openrabbit" in plain  # the findings table header is still there
+        assert "made by Subin Hong" not in plain
+        assert "(\\__/)" not in plain
+        # The embedded findings table is still there. We assert the table itself
+        # (header columns + the finding) rather than the word "openrabbit":
+        # requirement 2 dropped the redundant "## openrabbit review" second
+        # heading inside the walkthrough (the walkthrough already heads the
+        # section with "Findings"), so "openrabbit" no longer appears in the
+        # embedded body — the table being present is the real signal.
+        assert "| Severity | Category | File | Line | Finding |" in plain
+        assert "SQL injection" in plain
+        # And no double heading: the redundant "## openrabbit review" is gone.
+        assert "## openrabbit review" not in plain
 
     def test_persona_sign_off_is_korean_when_ko(self):
         # ko + persona ON → the sign-off line is Korean (reuses the label map).
@@ -712,9 +733,16 @@ class TestPersonaBranding:
             persona=True,
         )
         assert "🐰" in md
-        last_nonblank = [ln for ln in md.splitlines() if ln.strip()][-1]
-        # The sign-off carries Hangul (Korean), not the English sign-off text.
-        assert any("가" <= ch <= "힣" for ch in last_nonblank)
+        nonblank = [ln for ln in md.splitlines() if ln.strip()]
+        # The closing line is the language-agnostic attribution; the 🐰 sign-off
+        # sits just above it and carries Hangul (Korean), not the English text.
+        assert nonblank[-1] == "_made by Subin Hong_"
+        sign_off = nonblank[-2]
+        assert "🐰" in sign_off
+        assert any("가" <= ch <= "힣" for ch in sign_off)
+        # The casual ko copy, not the old stiff "검토했습니다 — 들러 주세요".
+        assert "둘러봤어요" in sign_off
+        assert "검토했습니다" not in sign_off
 
     def test_persona_off_ko_has_no_sign_off(self):
         # Opt-out applies regardless of language: ko + persona OFF is plain.

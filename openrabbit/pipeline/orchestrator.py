@@ -440,7 +440,10 @@ def review(
             "kept": len(ranked),
         }
         summary = emit_mod.render_summary_markdown(
-            ranked, stats=stats, response_language=response_language
+            ranked,
+            stats=stats,
+            response_language=response_language,
+            persona=config.review.persona,
         )
         # Enriched sticky walkthrough: high-level summary + grouped changed-files
         # table + (conditional) Mermaid interaction diagram + findings table.
