@@ -58,18 +58,21 @@ _LABELS: dict[str, dict[str, str]] = {
         "change_summary": "Change summary",
         "interaction_flow": "Interaction flow",
         "findings": "Findings",
-        # Rabbit sign-off (Feature 2). One line, professional, not spammy.
-        "sign_off": "Reviewed by openrabbit — hop on by anytime.",
+        # Rabbit sign-off (Feature 2). Casual + friendly, not stiff/spammy.
+        "sign_off": "openrabbit hopped through your changes — ping me anytime!",
     },
     "ko": {
-        "walkthrough": "워크스루",
+        # "둘러보기" is the natural Korean for a walkthrough; the prior
+        # transliteration "워크스루" read awkwardly.
+        "walkthrough": "둘러보기",
         "changed_files": "변경된 파일",
         "group": "그룹",
         "files": "파일",
         "change_summary": "변경 요약",
         "interaction_flow": "상호작용 흐름",
         "findings": "발견 사항",
-        "sign_off": "openrabbit가 검토했습니다 — 언제든 들러 주세요.",
+        # Casual + friendly (the prior "검토했습니다 — 들러 주세요" was too stiff).
+        "sign_off": "openrabbit가 쓱 둘러봤어요. 또 불러줘요!",
     },
 }
 
@@ -79,6 +82,16 @@ _LABELS: dict[str, dict[str, str]] = {
 #: The single branding marker. Kept in one place so the header marker, the
 #: optional findings marker, and the sign-off all stay consistent and tasteful.
 _RABBIT = "🐰"
+
+#: Small ASCII-art rabbit shown at the very TOP of the walkthrough (persona ON
+#: only). Wrapped in a fenced code block so GitHub renders it monospace/aligned
+#: (proportional fonts would otherwise skew the art). Same art for every
+#: language. Kept tiny and tasteful (SPEC principle 1: low-noise).
+_ASCII_RABBIT = "```\n(\\__/)\n(='.'=)\n(\")_(\")\n```"
+
+#: Attribution line shown right after the sign-off (persona ON only). Italic so
+#: it renders small/secondary. Same for every language.
+_ATTRIBUTION = "_made by Subin Hong_"
 
 
 def _labels(response_language: str) -> dict[str, str]:
@@ -395,10 +408,12 @@ def build_walkthrough(
     pixel-identical to the pre-feature output; an unknown code degrades to ``en``.
 
     ``persona`` (default ``True``) controls the rabbit branding (Feature 2). When
-    ON the walkthrough heading + findings heading carry a tasteful 🐰 marker and a
-    one-line sign-off (localized via ``response_language``) closes the body; when
-    OFF the output is plain/neutral (no emoji, no sign-off) so a team can opt out.
-    ``persona=False`` is byte-identical to the pre-Feature-2 rendering.
+    ON the body opens with a small fenced ASCII-art rabbit, the walkthrough +
+    findings headings carry a tasteful 🐰 marker, and a casual one-line sign-off
+    (localized via ``response_language``) plus a small italic "made by Subin Hong"
+    attribution close the body; when OFF the output is plain/neutral (no art, no
+    emoji, no sign-off, no attribution) so a team can opt out. ``persona=False``
+    is byte-identical to the pre-Feature-2 rendering.
     """
     labels = _labels(response_language)
     plans = list(file_plans)
@@ -413,7 +428,13 @@ def build_walkthrough(
         if persona
         else f"### {labels['findings']}"
     )
-    sections: list[str] = [
+    sections: list[str] = []
+    # Tasteful ASCII-art rabbit at the very top (persona ON only). Fenced so it
+    # renders monospace/aligned on GitHub. Omitted when persona is OFF so the
+    # plain rendering stays byte-identical.
+    if persona:
+        sections += [_ASCII_RABBIT, ""]
+    sections += [
         walkthrough_heading,
         "",
         _summary(pr_context, plans),
@@ -426,20 +447,32 @@ def build_walkthrough(
         sections += ["", _render_mermaid(plans, labels)]
 
     # Reuse today's findings summary table (requirement 4); pass the language so
-    # its header/count/stats line localize too. The emit renderer already escapes
-    # its own cells and handles the empty case.
+    # its count/stats line localize too. We already emit our own localized
+    # `findings_heading` right above, so pass ``heading=False`` to suppress the
+    # renderer's own "## openrabbit review" heading — otherwise the body would
+    # DOUBLE-head (our "Findings"/"발견 사항" + its heading). The emit renderer
+    # already escapes its own cells and handles the empty case.
     sections += [
         "",
         findings_heading,
         "",
         render_summary_markdown(
-            findings, stats=stats, response_language=response_language
+            findings,
+            stats=stats,
+            response_language=response_language,
+            heading=False,
         ),
     ]
 
-    # Tasteful one-line rabbit sign-off, localized; omitted when persona is OFF so
-    # the plain rendering is byte-identical to the pre-Feature-2 output.
+    # Casual one-line rabbit sign-off + a small italic attribution, localized;
+    # omitted when persona is OFF so the plain rendering is byte-identical to the
+    # pre-Feature-2 output.
     if persona:
-        sections += ["", f"{_RABBIT} _{labels['sign_off']}_"]
+        sections += [
+            "",
+            f"{_RABBIT} _{labels['sign_off']}_",
+            "",
+            _ATTRIBUTION,
+        ]
 
     return "\n".join(sections)

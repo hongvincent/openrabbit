@@ -428,7 +428,10 @@ def _cmd_review_online(
             }
             response_language = config.review.response_language
             summary = emit_mod.render_summary_markdown(
-                result.findings, stats=stats, response_language=response_language
+                result.findings,
+                stats=stats,
+                response_language=response_language,
+                persona=config.review.persona,
             )
             # Build the enriched sticky walkthrough (grouped changed-files table
             # + conditional Mermaid + findings table) from the routed diff. The
