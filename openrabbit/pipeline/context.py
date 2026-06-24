@@ -65,6 +65,39 @@ _SECURITY_FRAME = (
 _UNTRUSTED_TAG_RE = re.compile(r"</?\s*untrusted\b[^>]*>", re.IGNORECASE)
 
 
+# --------------------------------------------------------------------------- #
+# response-language instruction (Feature 1)                                     #
+# --------------------------------------------------------------------------- #
+#: Human-readable name (with native script) per canonical language code. Used to
+#: build the instruction appended to the finder + verifier system prompts when
+#: ``review.response_language`` is non-``en``. ``en`` is intentionally ABSENT so
+#: the default path appends nothing (byte-stable prefix preserved).
+_LANGUAGE_NAMES = {
+    "ko": "Korean (한국어)",
+}
+
+
+def language_instruction(response_language: str) -> str:
+    """Return the system-prompt suffix that localizes USER-FACING text.
+
+    For a non-``en`` canonical language the returned string instructs the model
+    to write each finding's user-facing ``title``/``description`` in that
+    language while doing ALL REASONING in English (so cross-family verification
+    and any English-only heuristics stay robust). Returns ``""`` for ``en`` (or
+    any unknown code) so the default path appends nothing and the cacheable
+    prefix stays byte-identical to a pre-feature run.
+    """
+    name = _LANGUAGE_NAMES.get(response_language)
+    if name is None:
+        return ""
+    return (
+        f"\n\nLANGUAGE: Write each finding's user-facing `title` and "
+        f"`description`/`body` in {name}. Do ALL REASONING in English; only the "
+        "final user-facing text is translated. Keep code identifiers, file "
+        "paths, and ruleIds unchanged."
+    )
+
+
 def neutralize_untrusted_fence(text: str) -> str:
     """HTML-escape the angle brackets of any literal ``<untrusted>`` tag in DATA.
 

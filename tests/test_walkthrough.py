@@ -69,7 +69,11 @@ class TestSummary:
     def test_summary_present(self):
         plans = [_file_plan("src/api/auth.py"), _file_plan("src/api/users.py")]
         md = wt.build_walkthrough({}, plans, [_finding()])
-        assert "## Walkthrough" in md
+        # Default persona is ON → the heading is the branded "## 🐰 Walkthrough";
+        # the localized label word is still present (branding is additive). The
+        # plain "## Walkthrough" contract is asserted by TestPersonaBranding.
+        heading = next(ln for ln in md.splitlines() if ln.startswith("## "))
+        assert "Walkthrough" in heading
         # A high-level summary sentence exists before the table.
         summary = md.split("|", 1)[0]
         assert len(summary.strip()) > 0
@@ -232,7 +236,9 @@ class TestFindingsAndBounds:
     def test_no_findings_still_renders_walkthrough(self):
         plans = [_file_plan("src/api/auth.py")]
         md = wt.build_walkthrough({}, plans, [])
-        assert "## Walkthrough" in md
+        # Default persona ON → branded heading; the "Walkthrough" label word is
+        # still present (plain "## Walkthrough" is covered by TestPersonaBranding).
+        assert "Walkthrough" in md
         # Findings section communicates the clean result.
         assert "No issues" in md or "no issues" in md.lower()
 
@@ -258,7 +264,8 @@ class TestFindingsAndBounds:
     def test_empty_fileset_is_safe(self):
         md = wt.build_walkthrough({}, [], [])
         assert isinstance(md, str)
-        assert "## Walkthrough" in md
+        # Default persona ON → branded heading; the label word is still present.
+        assert "Walkthrough" in md
 
 
 # --------------------------------------------------------------------------- #
@@ -387,17 +394,20 @@ class TestEmitWiring:
     (grouped changed-files table) in the sticky walkthrough payload — not just
     the minimal summary it used before."""
 
-    def _config(self):
+    def _config(self, *, persona=None):
         from openrabbit.config import load_config
 
+        review: dict = {
+            "profile": "balanced",
+            "confidence_gate": 0.80,
+            "lenses": ["correctness", "security"],
+        }
+        if persona is not None:
+            review["persona"] = persona
         return load_config(
             {
                 "version": 1,
-                "review": {
-                    "profile": "balanced",
-                    "confidence_gate": 0.80,
-                    "lenses": ["correctness", "security"],
-                },
+                "review": review,
                 "model_roles": {
                     "finder": {
                         "model": "amazon.nova-pro-v1:0",
@@ -520,9 +530,200 @@ class TestEmitWiring:
         assert result.reviewed is True
         sticky = result.emitted["sticky_walkthrough"]
         # The enriched walkthrough now carries the grouped changed-files table.
-        assert "## Walkthrough" in sticky
+        # NOTE: persona defaults ON, so the heading is the BRANDED "## 🐰 ..."
+        # form — the localized word "Walkthrough" is still present in it.
+        assert "🐰" in sticky
+        assert "Walkthrough" in sticky
         assert "### Changed files" in sticky
         assert "| Group | Files | Change summary |" in sticky
         assert "src/api" in sticky
         # ...and still embeds the findings table.
         assert "SQL injection" in sticky
+
+    def test_persona_threaded_from_config_default_on(self):
+        """The orchestrator threads review.persona into build_walkthrough; the
+        default config (persona unset → True) yields a branded sticky."""
+        from openrabbit.pipeline import orchestrator as orch
+        from openrabbit.providers.base import FakeProvider
+
+        config = self._config()  # persona unset → default True
+        finder = FakeProvider([self._emit_findings_result([]) for _ in range(4)])
+        verifier = FakeProvider([self._verify_batch_result([])])
+        result = orch.review(
+            config,
+            pr_context={
+                "draft": False,
+                "state": "open",
+                "head_sha": "abc",
+                "diff": _SAMPLE_DIFF,
+                "title": "Harden auth",
+            },
+            providers={"finder": finder, "verifier": verifier},
+        )
+        assert result.reviewed is True
+        assert "🐰" in result.emitted["sticky_walkthrough"]
+
+    def test_persona_off_from_config_produces_plain_sticky(self):
+        """review.persona=False threads through → plain sticky (no 🐰)."""
+        from openrabbit.pipeline import orchestrator as orch
+        from openrabbit.providers.base import FakeProvider
+
+        config = self._config(persona=False)
+        finder = FakeProvider([self._emit_findings_result([]) for _ in range(4)])
+        verifier = FakeProvider([self._verify_batch_result([])])
+        result = orch.review(
+            config,
+            pr_context={
+                "draft": False,
+                "state": "open",
+                "head_sha": "abc",
+                "diff": _SAMPLE_DIFF,
+                "title": "Harden auth",
+            },
+            providers={"finder": finder, "verifier": verifier},
+        )
+        assert result.reviewed is True
+        sticky = result.emitted["sticky_walkthrough"]
+        assert "🐰" not in sticky
+        assert "## Walkthrough" in sticky
+
+
+# --------------------------------------------------------------------------- #
+# response_language localization (Feature 1)                                     #
+# --------------------------------------------------------------------------- #
+class TestResponseLanguageLabels:
+    """The STATIC walkthrough labels localize; en stays pixel-identical."""
+
+    def test_default_en_labels_unchanged(self):
+        plans = [_file_plan("src/api/auth.py")]
+        # This pins Stage 1's "en static labels are pixel-identical to pre-feature"
+        # contract, which is the persona=False (un-branded) rendering. Feature 2's
+        # 🐰 branding is ON by default but is purely additive and tested separately
+        # in TestPersonaBranding; here we assert the plain English headings exactly.
+        md = wt.build_walkthrough({"title": "X"}, plans, [_finding()], persona=False)
+        assert "## Walkthrough" in md
+        assert "### Changed files" in md
+        assert "| Group | Files | Change summary |" in md
+        assert "### Findings" in md
+        assert "| Severity | Category | File | Line | Finding |" in md
+
+    def test_explicit_en_is_byte_identical_to_default(self):
+        plans = [
+            _file_plan("src/api/auth.py"),
+            _file_plan("tests/test_auth.py", file_type="test"),
+        ]
+        default = wt.build_walkthrough({"title": "X"}, plans, [_finding()])
+        explicit = wt.build_walkthrough(
+            {"title": "X"}, plans, [_finding()], response_language="en"
+        )
+        assert default == explicit
+
+    def test_ko_localizes_static_labels(self):
+        plans = [_file_plan("src/api/auth.py")]
+        md = wt.build_walkthrough(
+            {"title": "X"}, plans, [_finding()], response_language="ko"
+        )
+        # The English static labels must be GONE (replaced by Korean).
+        assert "### Changed files" not in md
+        assert "| Group | Files | Change summary |" not in md
+        assert "### Findings" not in md
+        # And Korean labels must appear (heading + the changed-files section).
+        assert "변경된 파일" in md  # "Changed files"
+        assert "## Walkthrough" not in md  # heading is localized too
+        assert "워크스루" in md or "검토 요약" in md
+
+    def test_ko_localizes_findings_table_header(self):
+        plans = [_file_plan("src/api/auth.py")]
+        md = wt.build_walkthrough(
+            {"title": "X"}, plans, [_finding()], response_language="ko"
+        )
+        # The English findings table header must be localized.
+        assert "| Severity | Category | File | Line | Finding |" not in md
+        assert "심각도" in md  # Severity
+        assert "카테고리" in md  # Category
+
+    def test_ko_localizes_stats_and_count_line(self):
+        plans = [_file_plan("src/api/auth.py")]
+        stats = {"reviewable files": 1, "raw": 2, "kept": 1}
+        md = wt.build_walkthrough(
+            {"title": "X"}, plans, [_finding()], stats=stats, response_language="ko"
+        )
+        # The English "Found N issue(s) above the confidence gate" must be gone.
+        assert "above the confidence gate" not in md
+        # Korean count phrasing present.
+        assert "신뢰도" in md or "발견" in md
+
+
+# --------------------------------------------------------------------------- #
+# rabbit persona / branding (Feature 2)                                         #
+# --------------------------------------------------------------------------- #
+class TestPersonaBranding:
+    """Default output is BRANDED (🐰 header + a 1-line sign-off); persona=False
+    yields plain output (no emoji, no sign-off). The sign-off respects
+    response_language (reuses Stage 1's label map)."""
+
+    def test_default_output_is_branded(self):
+        # Default (no persona kwarg) → branded: a 🐰 in the walkthrough header.
+        plans = [_file_plan("src/api/auth.py")]
+        md = wt.build_walkthrough({"title": "X"}, plans, [_finding()])
+        # 🐰 appears in the top-level walkthrough heading line.
+        heading = next(ln for ln in md.splitlines() if ln.startswith("## "))
+        assert "🐰" in heading
+        # The localized word is still present in that heading (label preserved).
+        assert "Walkthrough" in heading
+
+    def test_default_output_has_sign_off(self):
+        # A short rabbit-flavored sign-off line at the END of the walkthrough.
+        plans = [_file_plan("src/api/auth.py")]
+        md = wt.build_walkthrough({"title": "X"}, plans, [_finding()])
+        # 🐰 also rides on the sign-off; the sign-off is the closing content.
+        assert md.count("🐰") >= 2  # header marker + sign-off marker
+        last_nonblank = [ln for ln in md.splitlines() if ln.strip()][-1]
+        assert "🐰" in last_nonblank
+
+    def test_persona_off_is_plain(self):
+        # persona=False → NO 🐰 anywhere and NO sign-off; plain neutral output.
+        plans = [_file_plan("src/api/auth.py")]
+        md = wt.build_walkthrough({"title": "X"}, plans, [_finding()], persona=False)
+        assert "🐰" not in md
+        # The plain en header is exactly the pre-feature heading.
+        assert "## Walkthrough" in md
+
+    def test_persona_off_is_byte_identical_to_pre_feature(self):
+        # With persona disabled, output must be byte-identical to the original
+        # (un-branded) walkthrough — i.e. branding is purely additive when ON.
+        plans = [
+            _file_plan("src/api/auth.py"),
+            _file_plan("tests/test_auth.py", file_type="test"),
+        ]
+        plain = wt.build_walkthrough({"title": "X"}, plans, [_finding()], persona=False)
+        # No emoji, no sign-off markers leaked into the plain rendering.
+        assert "🐰" not in plain
+        assert "openrabbit" in plain  # the findings table header is still there
+
+    def test_persona_sign_off_is_korean_when_ko(self):
+        # ko + persona ON → the sign-off line is Korean (reuses the label map).
+        plans = [_file_plan("src/api/auth.py")]
+        md = wt.build_walkthrough(
+            {"title": "X"},
+            plans,
+            [_finding()],
+            response_language="ko",
+            persona=True,
+        )
+        assert "🐰" in md
+        last_nonblank = [ln for ln in md.splitlines() if ln.strip()][-1]
+        # The sign-off carries Hangul (Korean), not the English sign-off text.
+        assert any("가" <= ch <= "힣" for ch in last_nonblank)
+
+    def test_persona_off_ko_has_no_sign_off(self):
+        # Opt-out applies regardless of language: ko + persona OFF is plain.
+        plans = [_file_plan("src/api/auth.py")]
+        md = wt.build_walkthrough(
+            {"title": "X"},
+            plans,
+            [_finding()],
+            response_language="ko",
+            persona=False,
+        )
+        assert "🐰" not in md

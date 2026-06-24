@@ -360,6 +360,7 @@ def review(
     verifier = _UsageRecordingProvider(raw_verifier)
 
     # Stage 4 — run lenses (report-all).
+    response_language = config.review.response_language
     raw_findings: list[Finding] = []
     for file_plan in plan.reviewable_files:
         raw_findings.extend(
@@ -371,6 +372,7 @@ def review(
                 enclosing_fetcher=enclosing_fetcher,
                 cache_prefix=cache_key,
                 lens_reasoning_effort=config.review.lens_reasoning_effort,
+                response_language=response_language,
             )
         )
 
@@ -393,6 +395,7 @@ def review(
         unverified_confidence_gate=config.review.unverified_confidence_gate,
         high_risk_files=high_risk_files,
         verifier_reasoning_effort=verifier_effort,
+        response_language=response_language,
     )
 
     # Feedback loop (SPEC 10, the trust differentiator): down-weight findings
@@ -436,11 +439,18 @@ def review(
             "raw": len(raw_findings),
             "kept": len(ranked),
         }
-        summary = emit_mod.render_summary_markdown(ranked, stats=stats)
+        summary = emit_mod.render_summary_markdown(
+            ranked, stats=stats, response_language=response_language
+        )
         # Enriched sticky walkthrough: high-level summary + grouped changed-files
         # table + (conditional) Mermaid interaction diagram + findings table.
         walkthrough = walkthrough_mod.build_walkthrough(
-            pr_context, plan.files, ranked, stats=stats
+            pr_context,
+            plan.files,
+            ranked,
+            stats=stats,
+            response_language=response_language,
+            persona=config.review.persona,
         )
         emitted = emit_mod.emit_console(
             ranked,

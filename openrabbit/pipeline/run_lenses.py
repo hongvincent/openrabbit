@@ -33,6 +33,7 @@ from openrabbit.pipeline.context import (
     EnclosingFetcher,
     build_file_message,
     gather_enclosing_context,
+    language_instruction,
 )
 from openrabbit.pipeline.route import FilePlan
 from openrabbit.providers.base import Provider
@@ -200,6 +201,7 @@ def run_lens(
     max_tokens: int = DEFAULT_FINDER_MAX_TOKENS,
     cache_prefix: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
+    response_language: str = "en",
 ) -> list[Finding]:
     """Run ONE lens over one file via the finder provider; return findings.
 
@@ -214,12 +216,21 @@ def run_lens(
     ``reasoningConfig.maxReasoningEffort``. ``None`` (the default) omits the opt
     entirely, leaving reasoning DISABLED (the Nova 2 default) so this lens runs
     a plain non-thinking pass.
+
+    ``response_language`` (default ``"en"``) localizes the USER-FACING finding
+    text: when non-``en`` a language instruction is APPENDED to the system
+    prompt telling the finder to write each finding's ``title``/``body`` in that
+    language while REASONING in English. ``"en"`` appends nothing, so the system
+    prompt stays byte-identical to a pre-feature run.
     """
     if file_message is None:
         file_message = build_file_message(
             file_plan, enclosing_fetcher=enclosing_fetcher
         )
-    system = f"{prefix}\n\n--- LENS: {lens_name} ---\n{lens_prompt}"
+    system = (
+        f"{prefix}\n\n--- LENS: {lens_name} ---\n{lens_prompt}"
+        f"{language_instruction(response_language)}"
+    )
     opts: dict[str, Any] = {"tool_choice": EMIT_FINDINGS_TOOL}
     effective_max_tokens = max_tokens
     if reasoning_effort is not None:
@@ -249,6 +260,7 @@ def run_lenses(
     max_tokens: int = DEFAULT_FINDER_MAX_TOKENS,
     cache_prefix: Optional[str] = None,
     lens_reasoning_effort: Optional[Mapping[str, str]] = None,
+    response_language: str = "en",
 ) -> list[Finding]:
     """Run every assigned lens over one file; aggregate findings.
 
@@ -268,6 +280,10 @@ def run_lenses(
     effort flows into the finder call as ``opts['reasoning_effort']``
     (consumed by the Converse reasoning adapter). Defaulting to ``None`` keeps
     callers that do not configure per-lens effort byte-for-byte unchanged.
+
+    ``response_language`` (default ``"en"``) is forwarded to every per-lens call
+    so the finder localizes its user-facing finding text (see :func:`run_lens`).
+    ``"en"`` leaves the system prompt byte-identical to a pre-feature run.
     """
     if not file_plan.lenses:
         return []
@@ -289,6 +305,7 @@ def run_lenses(
                 max_tokens=max_tokens,
                 cache_prefix=cache_prefix,
                 reasoning_effort=effort_map.get(lens_name),
+                response_language=response_language,
             )
         )
     return findings

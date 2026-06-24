@@ -30,6 +30,28 @@ TELEMETRY_MODES = ("opt-in", "opt-out")
 # A lens absent from ``review.lens_reasoning_effort`` runs with reasoning OFF
 # (the Nova 2 default ``type: "disabled"``).
 REASONING_EFFORTS = ("low", "medium", "high")
+# Canonical user-facing response languages. The harness normalizes friendly
+# aliases (any case) down to one of these 2-letter codes, so the prompt/label
+# logic only ever sees a canonical value. ``en`` is the default (no behavior
+# change). Extend by adding a canonical code here + an alias mapping below + a
+# Korean-style label map in walkthrough.py.
+RESPONSE_LANGUAGES = ("en", "ko")
+DEFAULT_RESPONSE_LANGUAGE = "en"
+# Rabbit persona / branding (Feature 2). When ON (the default) the posted
+# walkthrough carries tasteful 🐰 branding + a one-line sign-off; when OFF the
+# output is plain/neutral so teams can opt out. A bool keeps the knob trivial.
+DEFAULT_PERSONA = True
+# Friendly aliases -> canonical code. Keys are matched case-insensitively.
+_RESPONSE_LANGUAGE_ALIASES = {
+    "en": "en",
+    "eng": "en",
+    "english": "en",
+    "ko": "ko",
+    "kor": "ko",
+    "korea": "ko",
+    "korean": "ko",
+    "한국어": "ko",
+}
 # Severity vocabulary ordered most→least severe; index = rank (0 = critical).
 # Mirrors openrabbit.findings.SEVERITIES (kept independent here so config has no
 # import-time dependency on the findings contract).
@@ -101,6 +123,19 @@ class ReviewConfig:
     #: ``reasoningConfig.maxReasoningEffort`` (research: LOW for
     #: correctness/security/logic/concurrency lenses, OFF for style/tests).
     lens_reasoning_effort: dict[str, str] = field(default_factory=dict)
+    #: Canonical user-facing response language (``"en"`` default or ``"ko"``).
+    #: When non-``en`` the finder + verifier prompts gain a language instruction
+    #: ("write each finding's user-facing title/description in <lang>; REASON in
+    #: English") and the walkthrough's static labels render in that language.
+    #: Aliases (e.g. ``"korean"``, ``"KO"``) are normalized to the canonical code
+    #: at load time, so this field is always one of :data:`RESPONSE_LANGUAGES`.
+    response_language: str = DEFAULT_RESPONSE_LANGUAGE
+    #: Rabbit persona / branding toggle (Feature 2). ``True`` (default) brands the
+    #: walkthrough with a 🐰 in the heading + a one-line sign-off (localized to
+    #: :attr:`response_language`); ``False`` produces plain, neutral output so a
+    #: team can opt out. Threaded from the orchestrator into the walkthrough
+    #: renderer exactly like :attr:`response_language`.
+    persona: bool = DEFAULT_PERSONA
 
 
 @dataclass(frozen=True)
@@ -330,6 +365,14 @@ def _parse_review(raw: Any) -> ReviewConfig:
         block.get("lens_reasoning_effort", {}) or {}
     )
 
+    response_language = _parse_response_language(
+        block.get("response_language", DEFAULT_RESPONSE_LANGUAGE)
+    )
+
+    persona = block.get("persona", DEFAULT_PERSONA)
+    if not isinstance(persona, bool):
+        raise ConfigError("review.persona must be a boolean")
+
     return ReviewConfig(
         profile=profile,
         confidence_gate=float(gate),
@@ -341,7 +384,34 @@ def _parse_review(raw: Any) -> ReviewConfig:
         always_verify_categories=always_verify_categories,
         unverified_confidence_gate=unverified_gate,
         lens_reasoning_effort=lens_reasoning_effort,
+        response_language=response_language,
+        persona=persona,
     )
+
+
+def _parse_response_language(raw: Any) -> str:
+    """Parse + normalize ``review.response_language`` to a canonical code.
+
+    Accepts a string alias (case-insensitive) from
+    :data:`_RESPONSE_LANGUAGE_ALIASES` and returns the canonical 2-letter code in
+    :data:`RESPONSE_LANGUAGES`. ``None``/absent falls back to the default
+    (``en``). A non-string or unknown value is a hard error so a typo fails fast
+    rather than silently posting an English review the user asked to localize.
+    """
+    if raw is None:
+        return DEFAULT_RESPONSE_LANGUAGE
+    if not isinstance(raw, str):
+        raise ConfigError(
+            f"review.response_language must be a string, got {type(raw).__name__}"
+        )
+    canonical = _RESPONSE_LANGUAGE_ALIASES.get(raw.strip().lower())
+    if canonical is None:
+        raise ConfigError(
+            f"review.response_language {raw!r} is not supported; allowed: "
+            f"{RESPONSE_LANGUAGES} (aliases: "
+            f"{sorted(_RESPONSE_LANGUAGE_ALIASES)})"
+        )
+    return canonical
 
 
 def _parse_always_verify_categories(raw: Any) -> frozenset[str]:
