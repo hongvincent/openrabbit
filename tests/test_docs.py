@@ -504,16 +504,17 @@ def test_scorecard_top_level_permissions_least_privilege(
     )
 
 
-def test_scorecard_grants_security_events_only_no_id_token(
+def test_scorecard_grants_security_events_and_id_token_for_publish(
     scorecard: dict[str, Any],
 ) -> None:
-    """The analysis job needs security-events: write (upload SARIF) but must NOT
-    grant id-token: write while openrabbit is a private repo.
+    """The analysis job grants security-events: write (upload SARIF) AND
+    id-token: write (OIDC, to PUBLISH the signed Scorecard result outward).
 
-    Publishing the signed Scorecard result outward (`publish_results`) is gated
-    off for the private repo (design spec §1.1) — it would leak repo metadata to
-    the public OpenSSF API and the public badge cannot resolve — so the OIDC
-    elevation that publishing requires must not be granted (least privilege)."""
+    openrabbit is now a PUBLIC repo (for cross-org CI onboarding), so
+    `publish_results` is true and publishing mints an OIDC token — without
+    id-token: write the publish step 403s. The whole job is gated on
+    ``visibility == 'public'`` (see the separate test), so if the repo is ever
+    made private the job is skipped entirely and this grant is inert."""
     perms_blocks: list[dict[str, Any]] = []
     if isinstance(scorecard.get("permissions"), dict):
         perms_blocks.append(scorecard["permissions"])
@@ -523,9 +524,9 @@ def test_scorecard_grants_security_events_only_no_id_token(
     assert any(b.get("security-events") == "write" for b in perms_blocks), (
         "scorecard.yml must grant security-events: write"
     )
-    assert not any(b.get("id-token") == "write" for b in perms_blocks), (
-        "scorecard.yml must NOT grant id-token: write while the repo is private "
-        "(publish_results is gated off; restore it only when made public)"
+    assert any(b.get("id-token") == "write" for b in perms_blocks), (
+        "scorecard.yml must grant id-token: write so the public-repo Scorecard "
+        "publish (publish_results) can mint its OIDC token (else it 403s)"
     )
 
 
