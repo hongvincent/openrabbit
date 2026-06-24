@@ -426,13 +426,21 @@ def _cmd_review_online(
                 "raw": result.raw_finding_count,
                 "kept": len(result.findings),
             }
-            summary = emit_mod.render_summary_markdown(result.findings, stats=stats)
+            response_language = config.review.response_language
+            summary = emit_mod.render_summary_markdown(
+                result.findings, stats=stats, response_language=response_language
+            )
             # Build the enriched sticky walkthrough (grouped changed-files table
             # + conditional Mermaid + findings table) from the routed diff. The
             # inline review body stays the minimal summary; the walkthrough
             # comment carries the richer content.
             walkthrough = walkthrough_mod.build_walkthrough(
-                pr_context, plan.files, result.findings, stats=stats
+                pr_context,
+                plan.files,
+                result.findings,
+                stats=stats,
+                response_language=response_language,
+                persona=config.review.persona,
             )
             # Diff-anchor guard (route.py): forward the per-file valid
             # ``{(side, line)}`` anchor sets + the PR's real changed-file set so

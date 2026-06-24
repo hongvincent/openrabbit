@@ -28,24 +28,69 @@ DEFAULT_EVENT = "COMMENT"
 _LOG = logging.getLogger("openrabbit.pipeline.emit")
 
 
+# --------------------------------------------------------------------------- #
+# localized summary strings (Feature 1 — response_language)                     #
+# --------------------------------------------------------------------------- #
+#: Per-language strings for the findings summary table. ``en`` is the SSOT
+#: default and must stay pixel-identical to today (existing tests pin these).
+#: An unknown code falls back to ``en``. ``{n}`` is the kept-finding count;
+#: ``stat_keys`` localizes the per-PR stats-line keys (reviewable files/raw/kept).
+_SUMMARY_STRINGS: dict[str, dict[str, Any]] = {
+    "en": {
+        "no_issues": "No issues found above the confidence gate. ✅",
+        "found": "Found **{n}** issue(s) above the confidence gate.",
+        "table_header": "| Severity | Category | File | Line | Finding |",
+        "stat_keys": {
+            "reviewable files": "reviewable files",
+            "raw": "raw",
+            "kept": "kept",
+        },
+    },
+    "ko": {
+        "no_issues": "신뢰도 기준을 넘는 문제가 발견되지 않았습니다. ✅",
+        "found": "신뢰도 기준을 넘는 문제 **{n}**건을 발견했습니다.",
+        "table_header": "| 심각도 | 카테고리 | 파일 | 라인 | 발견 사항 |",
+        "stat_keys": {
+            "reviewable files": "검토 대상 파일",
+            "raw": "원본",
+            "kept": "유지",
+        },
+    },
+}
+
+
+def _summary_strings(response_language: str) -> dict[str, Any]:
+    """Return the summary-string map for a language, falling back to English."""
+    return _SUMMARY_STRINGS.get(response_language, _SUMMARY_STRINGS["en"])
+
+
 def render_summary_markdown(
-    findings: list[Finding], *, stats: Optional[Mapping[str, Any]] = None
+    findings: list[Finding],
+    *,
+    stats: Optional[Mapping[str, Any]] = None,
+    response_language: str = "en",
 ) -> str:
-    """Render the sticky walkthrough markdown: summary + grouped findings table."""
+    """Render the sticky walkthrough markdown: summary + grouped findings table.
+
+    ``response_language`` (default ``"en"``) localizes the count line, the
+    "no issues" line, the table header, and the stats-line keys. ``"en"`` is
+    byte-identical to the pre-feature output.
+    """
     stats = stats or {}
+    strings = _summary_strings(response_language)
     if not findings:
-        header = "## openrabbit review\n\nNo issues found above the confidence gate. ✅"
+        header = "## openrabbit review\n\n" + strings["no_issues"]
         if stats:
-            header += "\n\n" + _stats_line(stats)
+            header += "\n\n" + _stats_line(stats, strings["stat_keys"])
         return header
 
     lines = ["## openrabbit review", ""]
-    lines.append(f"Found **{len(findings)}** issue(s) above the confidence gate.")
+    lines.append(strings["found"].format(n=len(findings)))
     if stats:
-        lines += ["", _stats_line(stats)]
+        lines += ["", _stats_line(stats, strings["stat_keys"])]
     lines += [
         "",
-        "| Severity | Category | File | Line | Finding |",
+        strings["table_header"],
         "| --- | --- | --- | --- | --- |",
     ]
     for f in findings:
@@ -60,8 +105,17 @@ def render_summary_markdown(
     return "\n".join(lines)
 
 
-def _stats_line(stats: Mapping[str, Any]) -> str:
-    parts = [f"{k}: {v}" for k, v in stats.items()]
+def _stats_line(
+    stats: Mapping[str, Any], stat_keys: Optional[Mapping[str, str]] = None
+) -> str:
+    """Render the italic per-PR stats line, optionally localizing the keys.
+
+    ``stat_keys`` maps an English stats key (``reviewable files``/``raw``/
+    ``kept``) to its localized label; an unmapped key passes through unchanged so
+    a caller adding a new stat never crashes.
+    """
+    stat_keys = stat_keys or {}
+    parts = [f"{stat_keys.get(k, k)}: {v}" for k, v in stats.items()]
     return "_" + ", ".join(parts) + "_"
 
 

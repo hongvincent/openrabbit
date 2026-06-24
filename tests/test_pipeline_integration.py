@@ -2140,7 +2140,16 @@ class TestCliOnline:
             for u, json in fake_client.posts
             if u.endswith("/comments")
         ]
-        assert any("## Walkthrough" in b for b in comment_bodies)
+        # Feature 2: review.persona defaults ON (the test config does not set it),
+        # so the shipped heading is the BRANDED "## 🐰 Walkthrough" — assert the
+        # walkthrough heading branding-agnostically (the "## " heading carries the
+        # "Walkthrough" label word). The "### Changed files" assert below is the
+        # real "enriched walkthrough shipped (not just the minimal summary)" signal.
+        assert any(
+            b2.startswith("## ") and "Walkthrough" in b2
+            for b in comment_bodies
+            for b2 in b.splitlines()
+        )
         assert any("### Changed files" in b for b in comment_bodies)
         # Parity with the offline orchestrator: the shipped walkthrough carries
         # the stats footer (and the count is labeled "reviewable files" so it

@@ -21,6 +21,17 @@ review:
                                # below verify_min_severity AND not trust-core).
                                # Must be >= confidence_gate. Drops low/maintainability
                                # nitpicks at ~0.8 the verifier never vetted.
+  response_language: en        # language of USER-FACING review text: en | ko
+                               # (aliases english/korean/한국어 normalize to en/ko).
+                               # When ko, finding title/description AND the
+                               # walkthrough's labels are written in Korean while
+                               # the models REASON in English (verification stays
+                               # robust). en (default) is unchanged.
+  persona: true                # rabbit branding (it's openRABBIT 🐰). true
+                               # (default) brands the posted walkthrough with a 🐰
+                               # in the heading + a one-line sign-off (localized to
+                               # response_language). Set false for plain, neutral
+                               # output (no emoji, no sign-off) if your team prefers.
   incremental: true            # review diff since last_reviewed_sha when available
   path_filters:
     - "!**/dist/**"

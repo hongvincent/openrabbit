@@ -273,6 +273,76 @@ def test_packaged_example_ships_per_lens_reasoning_effort():
     assert "tests" not in effort
 
 
+def test_response_language_defaults_to_en():
+    # Omitted -> English (no behavior change vs. pre-feature default).
+    cfg = load_config({})
+    assert cfg.review.response_language == "en"
+
+
+def test_response_language_ko_parsed():
+    cfg = load_config({"review": {"response_language": "ko"}})
+    assert cfg.review.response_language == "ko"
+
+
+def test_response_language_normalizes_aliases_to_canonical():
+    # Friendly aliases (any case) collapse to the canonical 2-letter code so the
+    # downstream prompt/label logic only ever sees 'en' or 'ko'.
+    assert (
+        load_config({"review": {"response_language": "KO"}}).review.response_language
+        == "ko"
+    )
+    assert (
+        load_config(
+            {"review": {"response_language": "korean"}}
+        ).review.response_language
+        == "ko"
+    )
+    assert (
+        load_config(
+            {"review": {"response_language": "English"}}
+        ).review.response_language
+        == "en"
+    )
+
+
+def test_response_language_unknown_rejected():
+    # A typo must fail fast rather than silently degrading to a half-translated
+    # review.
+    with pytest.raises(ConfigError):
+        load_config({"review": {"response_language": "fr"}})
+
+
+def test_response_language_must_be_string():
+    with pytest.raises(ConfigError):
+        load_config({"review": {"response_language": 42}})
+
+
+# --------------------------------------------------------------------------- #
+# review.persona (Feature 2 — rabbit branding, opt-out)                         #
+# --------------------------------------------------------------------------- #
+def test_persona_defaults_to_true():
+    # Default ON: the posted output is branded (🐰 + sign-off) out of the box.
+    cfg = load_config({})
+    assert cfg.review.persona is True
+
+
+def test_persona_false_parsed():
+    # Teams that want neutral output can opt out.
+    cfg = load_config({"review": {"persona": False}})
+    assert cfg.review.persona is False
+
+
+def test_persona_true_parsed():
+    cfg = load_config({"review": {"persona": True}})
+    assert cfg.review.persona is True
+
+
+def test_persona_must_be_boolean():
+    # A typo (e.g. a string) must fail fast rather than silently defaulting.
+    with pytest.raises(ConfigError):
+        load_config({"review": {"persona": "yes"}})
+
+
 def test_verify_min_severity_default_is_high():
     # By default only HIGH/CRITICAL findings route through the expensive
     # cross-family verifier (SPEC 7.3 cost lever #3).

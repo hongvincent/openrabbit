@@ -308,6 +308,7 @@ def verify_findings(
     high_risk_files: Optional[set[str]] = None,
     max_tokens: Optional[int] = None,
     verifier_reasoning_effort: Optional[str] = None,
+    response_language: str = "en",
 ) -> list[Finding]:
     """Verify a batch of findings; return only those that pass the gate.
 
@@ -337,6 +338,11 @@ def verify_findings(
     reasoning tokens so a reasoning verifier doesn't run out of budget mid-thought
     and return zero verdicts (item 1). It is a budget hint only — the effort
     itself reaches the verifier via its role options on ``complete()``.
+
+    ``response_language`` (default ``"en"``) localizes the verifier's USER-FACING
+    text: when non-``en`` a language instruction is APPENDED to the verifier
+    system prompt so any title/rationale it (re)writes is in that language while
+    its REASONING stays English. ``"en"`` appends nothing (prompt unchanged).
     """
     if not findings:
         return []
@@ -379,9 +385,12 @@ def verify_findings(
             )
         )
         user = Message(role="user", content=_build_prompt(to_verify, high_risk))
+        from openrabbit.pipeline.context import language_instruction
+
+        verifier_system = _SYSTEM_PROMPT + language_instruction(response_language)
         try:
             result = verifier.complete(
-                _SYSTEM_PROMPT,
+                verifier_system,
                 [user],
                 [_verify_tool()],
                 budget,

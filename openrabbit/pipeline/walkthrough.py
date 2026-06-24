@@ -42,6 +42,51 @@ _MAX_TITLE_CHARS = 160
 
 
 # --------------------------------------------------------------------------- #
+# localized static labels (Feature 1 — response_language)                       #
+# --------------------------------------------------------------------------- #
+#: Static walkthrough labels, keyed by canonical language code. ``en`` is the
+#: SSOT default and must stay pixel-identical to today (existing tests pin these
+#: English strings). A non-``en`` code renders the localized labels; an unknown
+#: code falls back to ``en`` so a bad value degrades to English rather than
+#: crashing. Keys map 1:1 to the section headings + table columns rendered below.
+_LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "walkthrough": "Walkthrough",
+        "changed_files": "Changed files",
+        "group": "Group",
+        "files": "Files",
+        "change_summary": "Change summary",
+        "interaction_flow": "Interaction flow",
+        "findings": "Findings",
+        # Rabbit sign-off (Feature 2). One line, professional, not spammy.
+        "sign_off": "Reviewed by openrabbit — hop on by anytime.",
+    },
+    "ko": {
+        "walkthrough": "워크스루",
+        "changed_files": "변경된 파일",
+        "group": "그룹",
+        "files": "파일",
+        "change_summary": "변경 요약",
+        "interaction_flow": "상호작용 흐름",
+        "findings": "발견 사항",
+        "sign_off": "openrabbit가 검토했습니다 — 언제든 들러 주세요.",
+    },
+}
+
+# --------------------------------------------------------------------------- #
+# rabbit persona / branding (Feature 2)                                         #
+# --------------------------------------------------------------------------- #
+#: The single branding marker. Kept in one place so the header marker, the
+#: optional findings marker, and the sign-off all stay consistent and tasteful.
+_RABBIT = "🐰"
+
+
+def _labels(response_language: str) -> dict[str, str]:
+    """Return the static-label map for a language, falling back to English."""
+    return _LABELS.get(response_language, _LABELS["en"])
+
+
+# --------------------------------------------------------------------------- #
 # untrusted-text hardening                                                      #
 # --------------------------------------------------------------------------- #
 def _sanitize(text: str, *, limit: Optional[int] = None) -> str:
@@ -144,7 +189,7 @@ def _filenames(plans: list[FilePlan]) -> str:
     return cell
 
 
-def _grouped_table(file_plans: list[FilePlan]) -> str:
+def _grouped_table(file_plans: list[FilePlan], labels: dict[str, str]) -> str:
     """Build the grouped changed-files table (bounded)."""
     groups: OrderedDict[str, list[FilePlan]] = OrderedDict()
     for plan in file_plans:
@@ -154,9 +199,9 @@ def _grouped_table(file_plans: list[FilePlan]) -> str:
     ordered = sorted(groups.items(), key=lambda kv: kv[0])
 
     lines = [
-        "### Changed files",
+        f"### {labels['changed_files']}",
         "",
-        "| Group | Files | Change summary |",
+        f"| {labels['group']} | {labels['files']} | {labels['change_summary']} |",
         "| --- | --- | --- |",
     ]
     shown = ordered[:MAX_TABLE_ROWS]
@@ -254,7 +299,7 @@ def _node_label(plan: FilePlan) -> str:
     return "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
 
 
-def _render_mermaid(file_plans: list[FilePlan]) -> str:
+def _render_mermaid(file_plans: list[FilePlan], labels_map: dict[str, str]) -> str:
     """Render a bounded Mermaid flowchart of the interacting components.
 
     Deterministic: nodes are the (sorted, capped) interaction files; edges chain
@@ -276,7 +321,12 @@ def _render_mermaid(file_plans: list[FilePlan]) -> str:
         seen.add(node)
         labels.append((node, p.path.rsplit("/", 1)[-1]))
 
-    lines = ["### Interaction flow", "", "```mermaid", "flowchart LR"]
+    lines = [
+        f"### {labels_map['interaction_flow']}",
+        "",
+        "```mermaid",
+        "flowchart LR",
+    ]
     for node, fname in labels:
         # The label sits inside a `["..."]` Mermaid string; a bare double-quote
         # in an UNTRUSTED filename would close it early and corrupt the diagram,
@@ -327,6 +377,8 @@ def build_walkthrough(
     findings: list[Finding],
     *,
     stats: Optional[Mapping[str, Any]] = None,
+    response_language: str = "en",
+    persona: bool = True,
 ) -> str:
     """Build the enriched sticky-walkthrough markdown.
 
@@ -336,18 +388,58 @@ def build_walkthrough(
 
     The result is deterministic and bounded. ``pr_context`` text is treated as
     UNTRUSTED data.
+
+    ``response_language`` (default ``"en"``) localizes the STATIC labels (section
+    headings + the changed-files table columns) and the findings summary table
+    header/count/stats line via :func:`render_summary_markdown`. ``"en"`` is
+    pixel-identical to the pre-feature output; an unknown code degrades to ``en``.
+
+    ``persona`` (default ``True``) controls the rabbit branding (Feature 2). When
+    ON the walkthrough heading + findings heading carry a tasteful 🐰 marker and a
+    one-line sign-off (localized via ``response_language``) closes the body; when
+    OFF the output is plain/neutral (no emoji, no sign-off) so a team can opt out.
+    ``persona=False`` is byte-identical to the pre-Feature-2 rendering.
     """
+    labels = _labels(response_language)
     plans = list(file_plans)
-    sections: list[str] = ["## Walkthrough", "", _summary(pr_context, plans)]
+    # Branding is purely additive: a 🐰 prefix on the heading when persona is ON.
+    walkthrough_heading = (
+        f"## {_RABBIT} {labels['walkthrough']}"
+        if persona
+        else f"## {labels['walkthrough']}"
+    )
+    findings_heading = (
+        f"### {_RABBIT} {labels['findings']}"
+        if persona
+        else f"### {labels['findings']}"
+    )
+    sections: list[str] = [
+        walkthrough_heading,
+        "",
+        _summary(pr_context, plans),
+    ]
 
     if plans:
-        sections += ["", _grouped_table(plans)]
+        sections += ["", _grouped_table(plans, labels)]
 
     if _should_render_mermaid(plans):
-        sections += ["", _render_mermaid(plans)]
+        sections += ["", _render_mermaid(plans, labels)]
 
-    # Reuse today's findings summary table verbatim (requirement 4). The emit
-    # renderer already escapes its own cells and handles the empty case.
-    sections += ["", "### Findings", "", render_summary_markdown(findings, stats=stats)]
+    # Reuse today's findings summary table (requirement 4); pass the language so
+    # its header/count/stats line localize too. The emit renderer already escapes
+    # its own cells and handles the empty case.
+    sections += [
+        "",
+        findings_heading,
+        "",
+        render_summary_markdown(
+            findings, stats=stats, response_language=response_language
+        ),
+    ]
+
+    # Tasteful one-line rabbit sign-off, localized; omitted when persona is OFF so
+    # the plain rendering is byte-identical to the pre-Feature-2 output.
+    if persona:
+        sections += ["", f"{_RABBIT} _{labels['sign_off']}_"]
 
     return "\n".join(sections)
