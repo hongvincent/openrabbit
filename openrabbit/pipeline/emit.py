@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from openrabbit.adapters.github import build_review_comment
 from openrabbit.findings import Finding
+from openrabbit.pipeline import render
 
 DEFAULT_EVENT = "COMMENT"
 
@@ -42,7 +43,7 @@ _SUMMARY_STRINGS: dict[str, dict[str, Any]] = {
         "heading": "openrabbit review",
         "no_issues": "No issues found above the confidence gate. ✅",
         "found": "Found **{n}** issue(s) above the confidence gate.",
-        "table_header": "| Severity | Category | File | Line | Finding |",
+        "table_header": "| Severity | Category | Confidence | File | Line | Finding |",
         "stat_keys": {
             "reviewable files": "reviewable files",
             "raw": "raw",
@@ -55,7 +56,7 @@ _SUMMARY_STRINGS: dict[str, dict[str, Any]] = {
         "heading": "openrabbit 리뷰",
         "no_issues": "신뢰도 기준을 넘는 문제가 발견되지 않았습니다. ✅",
         "found": "신뢰도 기준을 넘는 문제 **{n}**건을 찾았어요.",
-        "table_header": "| 심각도 | 카테고리 | 파일 | 라인 | 발견 사항 |",
+        "table_header": "| 심각도 | 카테고리 | 확신도 | 파일 | 라인 | 발견 사항 |",
         "stat_keys": {
             "reviewable files": "검토 대상 파일",
             "raw": "원본",
@@ -118,12 +119,23 @@ def render_summary_markdown(
     if head_line is not None:
         lines += [head_line, ""]
     lines.append(strings["found"].format(n=len(findings)))
+    # The 정량판단 severity histogram is a rich visual flourish (a fenced ASCII
+    # bar chart of findings-by-severity); gate it behind persona so a team that
+    # opted out of branding keeps a lean body. The per-finding Confidence column
+    # and the severity/category emoji below are NOT gated — they are universal
+    # triage aids and carry the product's calibration signal.
+    if persona:
+        histogram = render.severity_histogram(
+            findings, response_language=response_language
+        )
+        if histogram:
+            lines += ["", histogram]
     if stats:
         lines += ["", _stats_line(stats, strings["stat_keys"])]
     lines += [
         "",
         strings["table_header"],
-        "| --- | --- | --- | --- | --- |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for f in findings:
         title = f.title.replace("|", "\\|")
@@ -132,7 +144,10 @@ def render_summary_markdown(
         # before placing it in the `\`...\`` file cell.
         file_cell = f.file.replace("|", "\\|").replace("`", "\\`")
         lines.append(
-            f"| {f.severity} | {f.category} | `{file_cell}` | {f.start_line} | {title} |"
+            f"| {render.severity_display(f.severity)} "
+            f"| {render.category_display(f.category)} "
+            f"| {render.confidence_token(f.confidence)} "
+            f"| `{file_cell}` | {f.start_line} | {title} |"
         )
     return "\n".join(lines)
 

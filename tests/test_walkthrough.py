@@ -605,7 +605,10 @@ class TestResponseLanguageLabels:
         assert "### Changed files" in md
         assert "| Group | Files | Change summary |" in md
         assert "### Findings" in md
-        assert "| Severity | Category | File | Line | Finding |" in md
+        # The findings table now carries a calibrated Confidence column (the one
+        # deliberately-allowed en break) — a universal triage aid, present even
+        # with persona OFF.
+        assert "| Severity | Category | Confidence | File | Line | Finding |" in md
 
     def test_explicit_en_is_byte_identical_to_default(self):
         plans = [
@@ -676,19 +679,20 @@ class TestPersonaBranding:
         assert "Walkthrough" in heading
 
     def test_default_output_has_sign_off(self):
-        # A short, casual rabbit-flavored sign-off near the END, followed by a
-        # small italic "made by Subin Hong" attribution as the closing line.
+        # A short, casual rabbit-flavored sign-off is now the CLOSING line — the
+        # personal "_made by Subin Hong_" attribution was removed (low-noise:
+        # the brand already lives in the header + the sign-off).
         plans = [_file_plan("src/api/auth.py")]
         md = wt.build_walkthrough({"title": "X"}, plans, [_finding()])
-        # 🐰 also rides on the sign-off (header marker + sign-off marker).
+        # 🐰 rides on the header AND the sign-off (and the findings heading).
         assert md.count("🐰") >= 2
+        assert "_made by Subin Hong_" not in md
+        assert "made by Subin Hong" not in md
         nonblank = [ln for ln in md.splitlines() if ln.strip()]
-        # The attribution is the closing line; the 🐰 sign-off sits just above it.
-        assert nonblank[-1] == "_made by Subin Hong_"
-        assert "🐰" in nonblank[-2]
-        # The casual sign-off copy (not the old stiff "Reviewed by … hop on by").
-        assert "hopped through your changes" in nonblank[-2]
-        assert "ping me anytime" in nonblank[-2]
+        # The casual 🐰 sign-off is the last line of the body.
+        assert "🐰" in nonblank[-1]
+        assert "hopped through your changes" in nonblank[-1]
+        assert "ping me anytime" in nonblank[-1]
 
     def test_persona_off_is_plain(self):
         # persona=False → NO 🐰 anywhere and NO sign-off; plain neutral output.
@@ -707,20 +711,21 @@ class TestPersonaBranding:
             _file_plan("tests/test_auth.py", file_type="test"),
         ]
         plain = wt.build_walkthrough({"title": "X"}, plans, [_finding()], persona=False)
-        # No emoji, no sign-off, no ASCII art, no attribution leaked in.
+        # No 🐰 brand marker, no sign-off, no ASCII rabbit face, no attribution.
+        # (The byte-identical opt-out is re-scoped to "no persona/branding
+        # artifacts" — NOT "no informational columns": the emoji severity/
+        # category + Confidence column are universal triage aids and DO appear.)
         assert "🐰" not in plain
         assert "made by Subin Hong" not in plain
         assert "(\\__/)" not in plain
-        # The embedded findings table is still there. We assert the table itself
-        # (header columns + the finding) rather than the word "openrabbit":
-        # requirement 2 dropped the redundant "## openrabbit review" second
-        # heading inside the walkthrough (the walkthrough already heads the
-        # section with "Findings"), so "openrabbit" no longer appears in the
-        # embedded body — the table being present is the real signal.
-        assert "| Severity | Category | File | Line | Finding |" in plain
+        assert "(='.'=)" not in plain  # the compact header face is persona-only
+        # The enriched findings table (now with a Confidence column) is present.
+        assert "| Severity | Category | Confidence | File | Line | Finding |" in plain
         assert "SQL injection" in plain
         # And no double heading: the redundant "## openrabbit review" is gone.
         assert "## openrabbit review" not in plain
+        # The 정량판단 histogram is a persona flourish — absent when persona OFF.
+        assert "```" not in plain
 
     def test_persona_sign_off_is_korean_when_ko(self):
         # ko + persona ON → the sign-off line is Korean (reuses the label map).
@@ -733,11 +738,10 @@ class TestPersonaBranding:
             persona=True,
         )
         assert "🐰" in md
+        assert "_made by Subin Hong_" not in md
         nonblank = [ln for ln in md.splitlines() if ln.strip()]
-        # The closing line is the language-agnostic attribution; the 🐰 sign-off
-        # sits just above it and carries Hangul (Korean), not the English text.
-        assert nonblank[-1] == "_made by Subin Hong_"
-        sign_off = nonblank[-2]
+        # The closing line is now the 🐰 sign-off itself, carrying Hangul.
+        sign_off = nonblank[-1]
         assert "🐰" in sign_off
         assert any("가" <= ch <= "힣" for ch in sign_off)
         # The casual ko copy, not the old stiff "검토했습니다 — 들러 주세요".
@@ -755,3 +759,50 @@ class TestPersonaBranding:
             persona=False,
         )
         assert "🐰" not in md
+
+
+# --------------------------------------------------------------------------- #
+# compact rich header (replaces the 5-line fenced ASCII rabbit)                  #
+# --------------------------------------------------------------------------- #
+class TestCompactHeader:
+    """The top of the persona body is now a SINGLE compact <h2> band — a tiny
+    rabbit face + 🐰 + brand + section word — instead of a full-width 5-line
+    fenced ASCII block (which wasted vertical + horizontal space)."""
+
+    def test_header_is_single_line_no_fenced_art_at_top(self):
+        plans = [_file_plan("src/api/auth.py")]
+        md = wt.build_walkthrough({"title": "X"}, plans, [_finding()])
+        # The body opens directly with the heading — NOT a fenced code block.
+        first = next(ln for ln in md.splitlines() if ln.strip())
+        assert first.startswith("## ")
+        # The old multi-line fenced rabbit art is gone entirely.
+        assert "(\\__/)" not in md
+        assert '(")_(")' not in md
+
+    def test_header_fuses_face_brand_and_section(self):
+        plans = [_file_plan("src/api/auth.py")]
+        md = wt.build_walkthrough({"title": "X"}, plans, [_finding()])
+        heading = next(ln for ln in md.splitlines() if ln.startswith("## "))
+        # Reuses the iconic rabbit FACE inline, plus the 🐰 emoji, the brand
+        # name, and the localized section word — all on one band.
+        assert "(='.'=)" in heading
+        assert "🐰" in heading
+        assert "openrabbit" in heading
+        assert "Walkthrough" in heading
+
+    def test_header_localizes_section_word_ko(self):
+        plans = [_file_plan("src/api/auth.py")]
+        md = wt.build_walkthrough(
+            {"title": "X"}, plans, [_finding()], response_language="ko"
+        )
+        heading = next(ln for ln in md.splitlines() if ln.startswith("## "))
+        assert "(='.'=)" in heading and "🐰" in heading and "openrabbit" in heading
+        assert "둘러보기" in heading  # localized section word
+        assert "Walkthrough" not in heading
+
+    def test_attribution_removed_everywhere(self):
+        plans = [_file_plan("src/api/auth.py")]
+        on = wt.build_walkthrough({"title": "X"}, plans, [_finding()], persona=True)
+        off = wt.build_walkthrough({"title": "X"}, plans, [_finding()], persona=False)
+        assert "Subin Hong" not in on
+        assert "Subin Hong" not in off

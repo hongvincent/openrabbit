@@ -83,15 +83,13 @@ _LABELS: dict[str, dict[str, str]] = {
 #: optional findings marker, and the sign-off all stay consistent and tasteful.
 _RABBIT = "🐰"
 
-#: Small ASCII-art rabbit shown at the very TOP of the walkthrough (persona ON
-#: only). Wrapped in a fenced code block so GitHub renders it monospace/aligned
-#: (proportional fonts would otherwise skew the art). Same art for every
-#: language. Kept tiny and tasteful (SPEC principle 1: low-noise).
-_ASCII_RABBIT = "```\n(\\__/)\n(='.'=)\n(\")_(\")\n```"
-
-#: Attribution line shown right after the sign-off (persona ON only). Italic so
-#: it renders small/secondary. Same for every language.
-_ATTRIBUTION = "_made by Subin Hong_"
+#: Compact one-line rabbit identity (persona ON). The iconic ``(='.'=)`` face —
+#: reused from the original ASCII art so the identity carries over — is fused
+#: with the 🐰 emoji + brand name directly into the section ``<h2>`` band. This
+#: replaces the old 5-line fenced ASCII block, which forced a full-width grey
+#: code box + ~4 wasted vertical lines; the heading also stays a real ``<h2>``
+#: so it remains the visual anchor and lands in GitHub's heading TOC.
+_RABBIT_FACE = "(='.'=)"
 
 
 def _labels(response_language: str) -> dict[str, str]:
@@ -407,19 +405,24 @@ def build_walkthrough(
     header/count/stats line via :func:`render_summary_markdown`. ``"en"`` is
     pixel-identical to the pre-feature output; an unknown code degrades to ``en``.
 
-    ``persona`` (default ``True``) controls the rabbit branding (Feature 2). When
-    ON the body opens with a small fenced ASCII-art rabbit, the walkthrough +
-    findings headings carry a tasteful 🐰 marker, and a casual one-line sign-off
-    (localized via ``response_language``) plus a small italic "made by Subin Hong"
-    attribution close the body; when OFF the output is plain/neutral (no art, no
-    emoji, no sign-off, no attribution) so a team can opt out. ``persona=False``
-    is byte-identical to the pre-Feature-2 rendering.
+    ``persona`` (default ``True``) controls the rabbit branding. When ON the
+    section ``<h2>`` fuses a compact one-line rabbit identity
+    (``(='.'=)🐰 openrabbit · …``) — replacing the old full-width fenced ASCII
+    block — the walkthrough + findings headings carry a tasteful 🐰 marker, the
+    findings section gains the 정량판단 severity histogram, and a casual one-line
+    sign-off (localized) closes the body; when OFF the output is plain/neutral
+    (no face, no emoji, no histogram, no sign-off) so a team can opt out of
+    branding. The emoji severity/category + the calibrated Confidence column in
+    the findings table are UNIVERSAL triage aids and render on BOTH persona
+    values (they are informational signal, not branding).
     """
     labels = _labels(response_language)
     plans = list(file_plans)
-    # Branding is purely additive: a 🐰 prefix on the heading when persona is ON.
+    # Branding is purely additive: the persona heading fuses the compact rabbit
+    # face + 🐰 + brand name into the section <h2> (one band, no fenced block);
+    # plain mode keeps the bare localized heading (byte-identical opt-out).
     walkthrough_heading = (
-        f"## {_RABBIT} {labels['walkthrough']}"
+        f"## {_RABBIT_FACE}{_RABBIT} openrabbit · {labels['walkthrough']}"
         if persona
         else f"## {labels['walkthrough']}"
     )
@@ -428,13 +431,7 @@ def build_walkthrough(
         if persona
         else f"### {labels['findings']}"
     )
-    sections: list[str] = []
-    # Tasteful ASCII-art rabbit at the very top (persona ON only). Fenced so it
-    # renders monospace/aligned on GitHub. Omitted when persona is OFF so the
-    # plain rendering stays byte-identical.
-    if persona:
-        sections += [_ASCII_RABBIT, ""]
-    sections += [
+    sections: list[str] = [
         walkthrough_heading,
         "",
         _summary(pr_context, plans),
@@ -461,18 +458,18 @@ def build_walkthrough(
             stats=stats,
             response_language=response_language,
             heading=False,
+            persona=persona,
         ),
     ]
 
-    # Casual one-line rabbit sign-off + a small italic attribution, localized;
-    # omitted when persona is OFF so the plain rendering is byte-identical to the
-    # pre-Feature-2 output.
+    # Casual one-line rabbit sign-off (localized) closes the persona body. The
+    # personal "made by …" attribution was removed (low-noise: the brand already
+    # lives in the header + this sign-off). Omitted when persona is OFF so the
+    # plain rendering carries no branding artifact.
     if persona:
         sections += [
             "",
             f"{_RABBIT} _{labels['sign_off']}_",
-            "",
-            _ATTRIBUTION,
         ]
 
     return "\n".join(sections)

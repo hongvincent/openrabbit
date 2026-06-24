@@ -154,7 +154,14 @@ def _truncate_detail(detail: Any, limit: int) -> str:
 
 
 def _severity_badge(finding: Finding) -> str:
-    return f"**[{finding.severity.upper()}/{finding.category}]**"
+    """Bold-bracketed emoji severity + gitmoji category, e.g.
+    ``**[🔴 CRITICAL / 🔒 security]**`` — the same at-a-glance encoding as the
+    findings table (kept in :mod:`openrabbit.pipeline.render`)."""
+    from openrabbit.pipeline import render
+
+    sev = render.severity_inline(finding.severity)
+    cat = render.category_inline(finding.category)
+    return f"**[{sev} / {cat}]**"
 
 
 def normalize_comment_path(path: str) -> str:
@@ -187,7 +194,13 @@ def build_review_comment(finding: Finding) -> dict[str, Any]:
       smaller endpoint is ``start_line`` and the larger is the ``line`` anchor —
       GitHub 422s a review where ``start_line > line``.
     """
-    lines = [f"{_severity_badge(finding)} {finding.title}", "", finding.body]
+    from openrabbit.pipeline import render
+
+    badge_line = (
+        f"{_severity_badge(finding)} {finding.title} "
+        f"· {render.confidence_token(finding.confidence)}"
+    )
+    lines = [badge_line, "", finding.body]
     if finding.suggestion:
         lines += ["", render_suggestion_block(finding.suggestion)]
     lines += ["", fingerprint_marker(finding.fingerprint)]
