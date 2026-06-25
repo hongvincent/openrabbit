@@ -13,3 +13,7 @@ htmlcov/
 .claude/
 # Local session-notes dropped at repo root (date-prefixed working files).
 /[0-9][0-9][0-9][0-9]-*.txt
+
+# Local AI-assistant superpowers workspace + design specs — keep on disk, never
+# publish to a public repo (internal process/design detail can leak).
+docs/superpowers/
