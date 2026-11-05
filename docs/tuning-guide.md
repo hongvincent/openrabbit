@@ -4,7 +4,7 @@ openrabbit routes a PR through three (optionally four) **roles** — `triage`,
 `finder`, `verifier`, and an off-by-default `premium` — each a BYO Bedrock model
 in `.openrabbit.yaml`'s `model_roles`. This guide is the per-role / per-lens
 **reasoning-effort** decision table, the **confirmed** Nova 2 extended-thinking
-request shape, the GPT-5.4/5.5 `reasoning.effort` guidance, rough cost notes, the
+request shape, the GPT-6.1 Terra `reasoning.effort` guidance, rough cost notes, the
 Nova Pro deprecation rationale, and the prompt-cache budget.
 
 The headline lever: reasoning is **billed as output tokens**. Turning it on buys
@@ -18,8 +18,8 @@ OFF on the cheap broad pass and ON only where it pays for itself.
 | `triage` | Nova 2 Lite | **OFF** (temp 0) | n/a | near-free yes/no skip gate — a deterministic, temperature-0 pass; reasoning would just add cost. |
 | `finder` (pattern / style lenses) | Nova 2 Lite | **OFF** | pattern, style → OFF | shallow surface lenses don't benefit from thinking; keep them cheap. |
 | `finder` (logic / security / correctness / concurrency lenses) | Nova 2 Lite | **LOW** (opt-in) | logic, security, correctness, concurrency → `maxReasoningEffort: low` | deep lenses gain recall from a little reasoning; `low` is the cost-aware setting. Ships commented in the scaffold (default stays OFF/safe). |
-| `verifier` | GPT-5.4 | **medium** | escalate to **high** for security / deep findings | the cross-family judge; medium is the calibrated default, high for the highest-stakes findings. |
-| `premium` (off by default) | GPT-5.4 | **high** (→ `xhigh` available) | high for everything; `xhigh` for the hardest PRs | cost-gated highest-stakes role; only flip on when the spend is justified. |
+| `verifier` | GPT-6.1 Terra | **medium** | escalate to **high** for security / deep findings | the cross-family judge; medium is the calibrated default, high for the highest-stakes findings. |
+| `premium` (off by default) | GPT-6.1 Terra | **high** (→ `xhigh` / `max` available) | high for everything; `xhigh` for the hardest PRs | cost-gated highest-stakes role; only flip on when the spend is justified. |
 
 `OFF` means **no** `reasoningConfig` / `reasoning_effort` key at all (Nova
 defaults `type` to `disabled`). The finder reasoning path uses the **same
@@ -63,7 +63,7 @@ Rules that are load-bearing for correctness (a `ValidationException` otherwise):
 - Reasoning tokens come back in a separate `reasoningContent` block (the text is
   `[REDACTED]`) and are **billed as output tokens** ($2.50/MTok on Nova 2 Lite).
 
-## GPT-5.4 / GPT-5.5 reasoning.effort guidance
+## GPT-6.1 Terra reasoning.effort guidance
 
 The `openai.*` verifier/premium roles run over Bedrock's OpenAI-compatible
 *mantle* Responses endpoint (`us-east-1` / `us-east-2` only) and take
@@ -74,10 +74,14 @@ The `openai.*` verifier/premium roles run over Bedrock's OpenAI-compatible
 | `verifier` | **medium** (default) | the calibrated cross-family judge for normal findings. |
 | `verifier` | **high** | security findings and deep/high-severity findings that need the extra rigor. |
 | `premium` | **high** | the off-by-default highest-stakes role. |
-| `premium` | **xhigh** | the hardest PRs — note `xhigh` is **untested on the mantle** endpoint, so treat it as experimental and watch for `ValidationException`. |
+| `premium` | **xhigh** / **max** | the hardest PRs. On `openai.gpt-6.1-terra` (mantle `us-east-1`) a live probe accepted `none`, `low`, `medium`, `high`, `xhigh` and `max` (HTTP 200); reasoning tokens grew with each step (≈0 / 34 / 79 / 90 / 291 / 787 on a short test prompt), so `max` is a real tier above `xhigh`, not an alias. |
 
-Both `openai.gpt-5.4` and `openai.gpt-5.5` accept these efforts; the
-live-verified default verifier id is **gpt-5.4**.
+The default verifier id is **`openai.gpt-6.1-terra`**; OpenAI's model page lists
+`medium` as its default effort ("start with `medium` and increase it if the
+improvement in quality is worth the added time and tokens"). Keep
+`reasoning_effort` constant across calls in a run so the prompt prefix stays
+cacheable. `max` was probed on Terra only; it is not verified on
+`openai.gpt-5.4` / `openai.gpt-5.5`.
 
 ## Rough per-role cost notes
 
@@ -90,10 +94,10 @@ direct output-token multiplier. Rough mental model:
   cheap broad pass. Reasoning `low` adds output tokens (Nova 2 Lite output is
   ~$2.50/MTok, and the `reasoningContent` block counts as output), so enable it
   only on the deep lenses where recall matters.
-- **`verifier`** — GPT-5.4 medium: the dominant per-PR cost; widening
+- **`verifier`** — GPT-6.1 Terra medium: the dominant per-PR cost; widening
   `verify_min_severity` (configuration.md's cost lever) routes more findings here
   and `high` effort multiplies its output-token bill on security findings.
-- **`premium`** — GPT-5.4 high/`xhigh`: most expensive per call; keep it off by
+- **`premium`** — GPT-6.1 Terra high/`xhigh`/`max`: most expensive per call; keep it off by
   default and gate it to the highest-stakes PRs.
 
 Cut spend with `verify_min_severity` (route fewer findings to the verifier),

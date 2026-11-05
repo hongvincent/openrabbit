@@ -45,13 +45,13 @@ model_roles:                     # role -> { model, region, ...provider opts }
     #   reasoning_effort: low   # Converse additionalModelRequestFields →
     #                           # reasoningConfig {type: enabled, maxReasoningEffort: low}
   verifier:
-    model: openai.gpt-5.4
-    region: us-east-2
+    model: openai.gpt-6.1-terra   # mantle Responses; in-Region us-east-1 ONLY
+    region: us-east-1
     reasoning_effort: medium
     store: false
   premium:                       # optional, cost-gated; off by default
-    model: openai.gpt-5.4
-    region: us-east-2
+    model: openai.gpt-6.1-terra
+    region: us-east-1
     reasoning_effort: high
     enabled: false
 
@@ -132,8 +132,8 @@ and `region` are first-class; any other keys (`reasoning_effort`, `store`,
 |------|---------|---------|
 | `triage` | near-free yes/no on the diff (skip trivial changes) | `global.amazon.nova-2-lite-v1:0` @ `ap-northeast-2` |
 | `finder` | broad, high-recall report-all first pass | `global.amazon.nova-2-lite-v1:0` @ `ap-northeast-2` |
-| `verifier` | cross-family judge; scores + drops below the gate | `openai.gpt-5.4` @ `us-east-2` |
-| `premium` | optional, cost-gated highest-stakes role | `openai.gpt-5.4` (high) @ `us-east-2` (off by default) |
+| `verifier` | cross-family judge; scores + drops below the gate | `openai.gpt-6.1-terra` @ `us-east-1` |
+| `premium` | optional, cost-gated highest-stakes role | `openai.gpt-6.1-terra` (high) @ `us-east-1` (off by default) |
 
 The `finder` ships with **no** reasoning by default (the cheap/safe default).
 Nova 2 Lite's extended-thinking request shape (`additionalModelRequestFields` →
@@ -143,9 +143,10 @@ follow-up — see [`docs/tuning-guide.md`](tuning-guide.md) for the request shap
 the per-lens plan, and the cost notes. Crucially, the finder reasoning path uses
 the **same `global.amazon.nova-2-lite-v1:0` profile** the finder already runs on
 (Seoul) — that global profile is **live-verified** to accept `reasoningConfig` and
-return `reasoningContent`, so no `us.*` cross-region profile switch is needed. Both
-`openai.gpt-5.4` and `openai.gpt-5.5` are supported verifier ids — the
-live-verified default is **gpt-5.4**.
+return `reasoningContent`, so no `us.*` cross-region profile switch is needed. `openai.gpt-6.1-terra` is the default verifier and is
+available in `us-east-1` only (a Terra role in any other region is a hard config
+error; mint the bearer token for the same region). `openai.gpt-5.4` and
+`openai.gpt-5.5` remain supported verifier ids in `us-east-1` / `us-east-2`.
 
 ### Finder reasoning is configured per lens: `review.lens_reasoning_effort`
 
@@ -195,9 +196,11 @@ option. Full table + the confirmed Nova 2 request shape live in
 **Region validation.** Model ids are validated against
 `openrabbit.bedrock_models`:
 
-- **GPT-5.4 / GPT-5.5** (`openai.*`) run over Bedrock's OpenAI-compatible *mantle*
-  Responses endpoint, which physically only exists in `us-east-1` / `us-east-2`.
-  An `openai.*` role outside those regions is a **hard error** (the load fails).
+- **GPT-6.1 Terra / GPT-5.4 / GPT-5.5** (`openai.*`) run over Bedrock's
+  OpenAI-compatible *mantle* Responses endpoint, which physically only exists in
+  `us-east-1` / `us-east-2`. An `openai.*` role outside those regions is a **hard
+  error** (the load fails). `openai.gpt-6.1-terra` is narrower still: `us-east-1`
+  only, so a Terra role in `us-east-2` is also a hard error.
 - **Nova** (`amazon.*`) and **Claude** (`anthropic.*`) run over `bedrock-runtime`
   Converse with a broader, advisory region allow-list. An off-allow-list region
   is a **soft warning** (a cross-region inference profile may still reach it).

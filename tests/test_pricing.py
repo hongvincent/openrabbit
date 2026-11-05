@@ -58,6 +58,20 @@ class TestCorrectedAndNewPrices:
         assert price.cache_read_per_mtok == pytest.approx(0.55)
         assert price.cache_write_per_mtok == pytest.approx(5.50)
 
+    def test_gpt_6_1_terra_in_region_rate(self):
+        # Official Bedrock In-Region price per 1M tokens (<=272K context).
+        price = pricing.PRICE_TABLE["openai.gpt-6.1-terra"]
+        assert price.input_per_mtok == pytest.approx(1.10)
+        assert price.output_per_mtok == pytest.approx(5.50)
+        assert price.cache_read_per_mtok == pytest.approx(0.055)
+        assert price.cache_write_per_mtok == pytest.approx(1.375)
+
+    def test_gpt_6_1_terra_profile_prefix_prices_as_base(self):
+        assert (
+            pricing.lookup_price("us.openai.gpt-6.1-terra")
+            is pricing.PRICE_TABLE["openai.gpt-6.1-terra"]
+        )
+
     def test_gpt_5_4_added(self):
         price = pricing.PRICE_TABLE["openai.gpt-5.4"]
         assert price.input_per_mtok == pytest.approx(2.75)
