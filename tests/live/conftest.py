@@ -39,7 +39,9 @@ NOVA_REGION = "ap-northeast-2"
 # bare id is rejected with ValidationException). LIVE-VERIFIED on Converse.
 NOVA_MODEL = "global.amazon.nova-2-lite-v1:0"
 GPT_REGION = "us-east-1"
-GPT_MODEL = "openai.gpt-6.1-terra"  # SHIPPED verifier/judge — LIVE-VERIFIED on Responses
+GPT_MODEL = (
+    "openai.gpt-6.1-terra"  # SHIPPED verifier/judge — LIVE-VERIFIED on Responses
+)
 
 
 @pytest.fixture(scope="session")
