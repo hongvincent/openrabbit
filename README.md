@@ -22,10 +22,11 @@ provable**.
 ## What it is
 
 - **Bedrock-only, multi-model BYO.** Default routing is an **Amazon Nova 2 Lite**
-  finder (cheap, high-recall broad pass) → an **OpenAI GPT-5.4** verifier (strong,
-  cross-family independence; gate ≥ 0.80). A cost-gated GPT-5.4-high premium role
-  is available but off by default. (Both `openai.gpt-5.4` and `openai.gpt-5.5` are
-  supported verifier ids; the live-verified default is gpt-5.4.)
+  finder (cheap, high-recall broad pass) → an **OpenAI GPT-6.1 Terra** verifier (strong,
+  cross-family independence; gate ≥ 0.80). A cost-gated GPT-6.1-Terra-high premium
+  role is available but off by default. (`openai.gpt-5.4` and `openai.gpt-5.5` are
+  still supported verifier ids; the default is `openai.gpt-6.1-terra`, which runs
+  in `us-east-1` only.)
 - **Advisory-only.** The reasoning layer holds no merge / approve / push / write
   credentials. The PR diff is treated as **untrusted data**, fenced and never
   obeyed as instructions.
@@ -86,21 +87,21 @@ review:
 model_roles:
   triage:   { model: global.amazon.nova-2-lite-v1:0, region: ap-northeast-2 }
   finder:   { model: global.amazon.nova-2-lite-v1:0, region: ap-northeast-2 }
-  verifier: { model: openai.gpt-5.4, region: us-east-2, reasoning_effort: medium, store: false }
+  verifier: { model: openai.gpt-6.1-terra, region: us-east-1, reasoning_effort: medium, store: false }
 ```
 
 The full reference — every `review` key, `model_roles` + `verify_min_severity`,
 the five lenses, path filters, and `path_instructions` — is in
 [`docs/configuration.md`](docs/configuration.md).
 
-## Bedrock model routing (Nova 2 Lite finder → GPT-5.4 verifier)
+## Bedrock model routing (Nova 2 Lite finder → GPT-6.1 Terra verifier)
 
 | Role | Default model | Region | Why |
 |------|---------------|--------|-----|
 | triage / skip | `global.amazon.nova-2-lite-v1:0` | `ap-northeast-2` (Seoul) | near-free yes/no on the diff |
 | **finder** (broad, report-all) | `global.amazon.nova-2-lite-v1:0` | `ap-northeast-2` | cost-effective high-recall first pass |
-| **verifier** / judge | `openai.gpt-5.4` | `us-east-2` | strong, cross-family; gate ≥ 0.80 |
-| premium (optional, off by default) | `openai.gpt-5.4` (high) | `us-east-2` | highest-stakes PRs |
+| **verifier** / judge | `openai.gpt-6.1-terra` | `us-east-1` | strong, cross-family; gate ≥ 0.80 |
+| premium (optional, off by default) | `openai.gpt-6.1-terra` (high) | `us-east-1` | highest-stakes PRs |
 
 Nova 2 Lite runs via the `global.` cross-region inference profile (Seoul is
 live-verified on Converse); the finder ships with **no** `reasoning_effort` by
@@ -109,13 +110,15 @@ Nova 2 extended-thinking shape is now confirmed + live-verified, so you can opt 
 finder's logic/security lenses into `low`-effort reasoning, bump the verifier to
 `high` for security findings, and so on. See
 [`docs/tuning-guide.md`](docs/tuning-guide.md) for the per-role decision table, the
-confirmed request shape, cost notes, and prompt-cache limits. GPT-5.4 runs over
+confirmed request shape, cost notes, and prompt-cache limits. GPT models run over
 Bedrock's OpenAI-compatible *mantle*
-Responses endpoint, which only exists in `us-east-1` / `us-east-2` — a GPT-5.4
-(or GPT-5.5) role outside those regions is a hard config error. Both
-`openai.gpt-5.4` and `openai.gpt-5.5` are supported verifier ids; the
-live-verified default is **gpt-5.4**. If eval shows the finder's recall is too
-low, promote the finder to GPT-5.4 or Claude with a one-line config change.
+Responses endpoint, which only exists in `us-east-1` / `us-east-2` — a GPT role
+outside those regions is a hard config error. **GPT-6.1 Terra is available in
+`us-east-1` only** (a Terra role in `us-east-2` is also a hard config error), and
+the Bedrock bearer token must be minted for the same region (`verifier_region`).
+`openai.gpt-5.4` and `openai.gpt-5.5` remain supported verifier ids (both mantle
+regions); the default is **gpt-6.1-terra**. If eval shows the finder's recall is too
+low, promote the finder to GPT-6.1 Terra or Claude with a one-line config change.
 
 ## Security model
 

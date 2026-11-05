@@ -17,6 +17,7 @@ from openrabbit.bedrock_models import (
     ADAPTER_CONVERSE,
     ADAPTER_RESPONSES,
     DEPRECATED_MODELS,
+    KNOWN_MODELS,
     ModelInfo,
     Severity,
     adapter_for_model,
@@ -88,6 +89,53 @@ def test_gpt_5_4_in_seoul_is_hard_error():
 
 def test_gpt_5_4_in_us_east_2_ok():
     assert validate_model_region("openai.gpt-5.4", "us-east-2") is None
+
+
+# --------------------------------------------------------------------------- #
+# GPT-6.1 Terra verifier — mantle Responses, in-Region ONLY us-east-1          #
+# --------------------------------------------------------------------------- #
+def test_gpt_6_1_terra_is_registered_responses_strict_us_east_1_only():
+    info = lookup_model("openai.gpt-6.1-terra")
+    assert isinstance(info, ModelInfo)
+    assert info.adapter == ADAPTER_RESPONSES
+    assert info.region_strict is True
+    assert info.allowed_regions == frozenset({"us-east-1"})
+
+
+def test_gpt_6_1_terra_us_east_1_ok():
+    assert validate_model_region("openai.gpt-6.1-terra", "us-east-1") is None
+
+
+def test_gpt_6_1_terra_us_east_2_is_hard_error():
+    # Live probe: us-east-2 returns 404 "model does not exist".
+    verdict = validate_model_region("openai.gpt-6.1-terra", "us-east-2")
+    assert verdict is not None
+    assert verdict.severity == Severity.ERROR
+    assert "us-east-1" in verdict.message
+
+
+def test_gpt_6_1_terra_profile_prefixed_resolves():
+    assert lookup_model("us.openai.gpt-6.1-terra") is lookup_model(
+        "openai.gpt-6.1-terra"
+    )
+
+
+def test_gpt_5_x_keep_both_mantle_regions():
+    for model in ("openai.gpt-5.4", "openai.gpt-5.5"):
+        info = lookup_model(model)
+        assert info is not None
+        assert info.allowed_regions == frozenset({"us-east-1", "us-east-2"})
+
+
+def test_registry_regions_stay_within_adapter_supported_regions():
+    # The adapter's SUPPORTED_REGIONS is the set of regions where the mantle
+    # endpoint exists; the per-model restriction lives in the registry and must
+    # never name a region the adapter would reject.
+    from openrabbit.providers.openai_responses import SUPPORTED_REGIONS
+
+    for info in KNOWN_MODELS.values():
+        if info.adapter == ADAPTER_RESPONSES:
+            assert info.allowed_regions <= set(SUPPORTED_REGIONS), info.model_id
 
 
 def test_nova_2_lite_is_registered_converse():

@@ -18,7 +18,7 @@ against real Bedrock):
 * Nova finder/triage: region ``ap-northeast-2``, model id is the ``global.``
   inference profile ``global.amazon.nova-2-lite-v1:0`` — the SHIPPED finder
   (LIVE-VERIFIED on Converse in Seoul; the bare id fails ValidationException).
-* GPT-5.4 verifier/judge: region ``us-east-2``, model ``openai.gpt-5.4``, auth
+* GPT-6.1 Terra verifier/judge: region ``us-east-1``, model ``openai.gpt-6.1-terra``, auth
   via a short-lived bearer token minted with ``aws-bedrock-token-generator`` and
   read by the adapter from ``AWS_BEARER_TOKEN_BEDROCK``.
 """
@@ -38,8 +38,10 @@ NOVA_REGION = "ap-northeast-2"
 # SHIPPED finder/triage: Nova 2 Lite via the "global." inference profile (the
 # bare id is rejected with ValidationException). LIVE-VERIFIED on Converse.
 NOVA_MODEL = "global.amazon.nova-2-lite-v1:0"
-GPT_REGION = "us-east-2"
-GPT_MODEL = "openai.gpt-5.4"  # SHIPPED verifier/judge — LIVE-VERIFIED on Responses
+GPT_REGION = "us-east-1"
+GPT_MODEL = (
+    "openai.gpt-6.1-terra"  # SHIPPED verifier/judge — LIVE-VERIFIED on Responses
+)
 
 
 @pytest.fixture(scope="session")

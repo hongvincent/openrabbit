@@ -9,8 +9,9 @@ Design constraints (all from the spec, enforced here):
 
 * ``store: false`` on **every** call — this is private source code; no 30-day
   server-side retention is ever permitted.
-* Reasoning ``effort`` is constrained to ``{none, low, medium, high, xhigh}``
-  (default ``medium``). The ChatCompletions-only ``minimal`` value is rejected.
+* Reasoning ``effort`` is constrained to ``{none, low, medium, high, xhigh, max}``
+  (default ``medium``); all six were live-probed accepted on GPT-6.1 Terra.
+  The ChatCompletions-only ``minimal`` value is rejected.
 * Tools are serialized in the flat Responses shape
   ``{type: "function", name, parameters, strict: true}``.
 * Structured findings use ``text.format = {type: "json_schema", strict: true}``.
@@ -44,9 +45,18 @@ from openrabbit.providers.base import Provider, ProviderError
 #: Regions where the Bedrock OpenAI-compatible (mantle) endpoint is available.
 SUPPORTED_REGIONS: tuple[str, ...] = ("us-east-1", "us-east-2")
 
-#: Reasoning effort levels accepted by the Responses API for GPT-5.5.
-#: NOTE: ``minimal`` is a ChatCompletions-only value and is deliberately absent.
-REASONING_EFFORTS: tuple[str, ...] = ("none", "low", "medium", "high", "xhigh")
+#: Reasoning effort levels accepted by the Responses API (all six LIVE-PROBED
+#: HTTP 200 on openai.gpt-6.1-terra via mantle us-east-1; ``max`` reasons more
+#: than ``xhigh``). NOTE: ``minimal`` is a ChatCompletions-only value and is
+#: deliberately absent.
+REASONING_EFFORTS: tuple[str, ...] = (
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+)
 
 #: Default model id and reasoning effort.
 DEFAULT_MODEL = "openai.gpt-5.5"

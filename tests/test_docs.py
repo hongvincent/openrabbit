@@ -146,7 +146,7 @@ def test_readme_documents_bedrock_model_routing() -> None:
     # gpt-5.5 defaults. gpt-5.5 may still be MENTIONED (both 5.4/5.5 are supported)
     # but it must not be the named DEFAULT verifier id.
     assert "nova-2-lite" in low or "nova 2 lite" in low
-    assert "gpt-5.4" in low
+    assert "gpt-6.1-terra" in low or "gpt-6.1 terra" in low
     assert "finder" in low and "verifier" in low
 
 
@@ -159,11 +159,12 @@ def test_readme_default_model_table_uses_new_switch() -> None:
     low = text.lower()
     # The finder default is Nova 2 Lite, not nova-pro.
     assert "global.amazon.nova-2-lite-v1:0" in low or "nova-2-lite-v1:0" in low
-    # The verifier default is gpt-5.4.
-    assert "openai.gpt-5.4" in low
-    # The default verifier id must not be gpt-5.5 in the inline config snippet:
-    # the example model_roles block must route the verifier to gpt-5.4.
+    # The verifier default is gpt-6.1-terra, in us-east-1 (its only region).
+    assert "openai.gpt-6.1-terra" in low
+    assert "verifier: { model: openai.gpt-6.1-terra, region: us-east-1" in low
+    # The inline config snippet must not route the verifier to the old defaults.
     assert "verifier: { model: openai.gpt-5.5" not in low
+    assert "verifier: { model: openai.gpt-5.4" not in low
     # The finder default must not be the superseded nova-pro id.
     assert "finder:   { model: amazon.nova-pro-v1:0" not in low
 
@@ -251,12 +252,15 @@ def test_configuration_model_roles_use_new_switch_defaults() -> None:
     text = _text(CONFIGURATION)
     low = text.lower()
     assert "global.amazon.nova-2-lite-v1:0" in low
-    assert "openai.gpt-5.4" in low
+    assert "openai.gpt-6.1-terra" in low
     # The default finder/verifier ids must not be the old nova-pro / gpt-5.5.
     assert "amazon.nova-pro-v1:0" not in low
     # gpt-5.5 may appear only where historically accurate (both 5.4/5.5 supported),
     # never as the default verifier id in the role table.
     assert "`openai.gpt-5.5` @ `us-east-2`" not in text
+    # ...nor the previous gpt-5.4 @ us-east-2 default (Terra is us-east-1 only).
+    assert "`openai.gpt-5.4` @ `us-east-2`" not in text
+    assert "`openai.gpt-6.1-terra` @ `us-east-1`" in text
 
 
 def test_configuration_marks_external_tools_reserved() -> None:
@@ -632,8 +636,8 @@ def test_tuning_guide_documents_gpt54_reasoning_effort() -> None:
     """GPT-5.4/5.5 reasoning.effort guidance: medium default verifier, high for
     security, xhigh for the premium/untested role."""
     low = _lower(TUNING_GUIDE)
-    assert "gpt-5.4" in low or "gpt-5.5" in low, (
-        "tuning-guide.md must give GPT-5.4/5.5 reasoning.effort guidance"
+    assert "gpt-6.1-terra" in low, (
+        "tuning-guide.md must give GPT-6.1 Terra reasoning.effort guidance"
     )
     assert "reasoning.effort" in low or "reasoning effort" in low
     assert "xhigh" in low, "tuning-guide.md must mention the xhigh premium effort"

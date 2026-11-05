@@ -213,8 +213,12 @@ def test_scaffolded_config_round_trips(python_repo: Path) -> None:
     assert "verifier" in cfg.model_roles
     assert cfg.model_roles["triage"].model == "global.amazon.nova-2-lite-v1:0"
     assert cfg.model_roles["finder"].model == "global.amazon.nova-2-lite-v1:0"
-    assert cfg.model_roles["verifier"].model == "openai.gpt-5.4"
-    assert cfg.model_roles["verifier"].region == "us-east-2"
+    assert cfg.model_roles["verifier"].model == "openai.gpt-6.1-terra"
+    assert cfg.model_roles["verifier"].region == "us-east-1"  # Terra: us-east-1 only
+    assert cfg.model_roles["premium"].model == "openai.gpt-6.1-terra"
+    assert cfg.model_roles["premium"].region == "us-east-1"
+    assert cfg.model_roles["premium"].options.get("reasoning_effort") == "high"
+    assert cfg.model_roles["premium"].options.get("enabled") is False
     # The new finder must NOT default to the superseded nova-pro id, and the
     # verifier must NOT default to the superseded gpt-5.5 id.
     assert "nova-pro" not in cfg.model_roles["finder"].model.lower()
@@ -352,6 +356,20 @@ def test_scaffolded_workflow_calls_reusable(python_repo: Path) -> None:
     # It passes the AWS role ARN as a secret and triggers on pull_request.
     assert "aws_role_arn" in wf_file.content
     assert "pull_request" in wf_file.content
+
+
+def test_scaffolded_workflow_mints_token_for_terra_region(python_repo: Path) -> None:
+    """The scaffolded default verifier is GPT-6.1 Terra (mantle us-east-1 only).
+    The bearer token is minted for ``verifier_region`` (default us-east-2 in the
+    action), so the caller must pass ``verifier_region: us-east-1`` or the token
+    is region-mismatched and the mantle endpoint rejects it (401)."""
+    plan = scaffold(python_repo, dry_run=True)
+    wf_file = next(
+        f for f in plan.files if f.path == ".github/workflows/openrabbit.yml"
+    )
+    parsed = yaml.safe_load(wf_file.content)
+    with_ = parsed["jobs"]["openrabbit"]["with"]
+    assert with_["verifier_region"] == "us-east-1"
 
 
 def test_scaffolded_workflow_least_privilege_permissions(python_repo: Path) -> None:

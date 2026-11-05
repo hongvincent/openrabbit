@@ -81,7 +81,18 @@ PRICE_TABLE: dict[str, ModelPrice] = {
         cache_read_per_mtok=0.55,
         cache_write_per_mtok=5.50,
     ),
-    # gpt-5.4 — current default verifier (lower fabrication rate, ~half the
+    # gpt-6.1-terra — current default verifier. Official Bedrock In-Region list
+    # rate (<=272K context): input 1.10, cache write 1.375, cache read 0.055,
+    # output 5.50 per 1M. Prompts >272K context are billed at 2x input/cache and
+    # 1.5x output (2.20/2.75/0.11/8.25) — NOT modelled here (review prompts sit
+    # far below 272K), so a >272K call is under-estimated.
+    "openai.gpt-6.1-terra": ModelPrice(
+        input_per_mtok=1.10,
+        output_per_mtok=5.50,
+        cache_read_per_mtok=0.055,
+        cache_write_per_mtok=1.375,
+    ),
+    # gpt-5.4 — previous default verifier (lower fabrication rate, ~half the
     # gpt-5.5 cost; see openrabbit-model-choice). Best-effort Bedrock list rate.
     "openai.gpt-5.4": ModelPrice(
         input_per_mtok=2.75,

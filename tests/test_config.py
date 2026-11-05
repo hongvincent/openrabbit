@@ -161,7 +161,7 @@ def test_packaged_example_is_valid():
 
 
 def test_packaged_example_ships_decided_model_switch():
-    # The decided switch: Nova 2 Lite finder/triage + GPT-5.4 verifier
+    # The decided switch: Nova 2 Lite finder/triage + GPT-6.1 Terra verifier
     # (replaces nova-pro finder + gpt-5.5 verifier). The example must parse,
     # validate clean (no hard ERROR -> no raise), and emit no soft warnings
     # since every model/region pair is LIVE-VERIFIED & on its allow-list.
@@ -178,14 +178,14 @@ def test_packaged_example_ships_decided_model_switch():
     assert "reasoning_effort" not in finder.options
 
     verifier = cfg.model_roles["verifier"]
-    assert verifier.model == "openai.gpt-5.4"
-    assert verifier.region == "us-east-2"
+    assert verifier.model == "openai.gpt-6.1-terra"
+    assert verifier.region == "us-east-1"  # Terra in-Region is us-east-1 ONLY
     assert verifier.options.get("reasoning_effort") == "medium"
     assert verifier.options.get("store") is False
 
     premium = cfg.model_roles["premium"]
-    assert premium.model == "openai.gpt-5.4"
-    assert premium.region == "us-east-2"
+    assert premium.model == "openai.gpt-6.1-terra"
+    assert premium.region == "us-east-1"
     assert premium.options.get("reasoning_effort") == "high"
     assert premium.options.get("enabled") is False
 

@@ -82,6 +82,12 @@ class ModelInfo:
 #: ``openrabbit.providers.openai_responses.SUPPORTED_REGIONS``.
 GPT_REGIONS: frozenset[str] = frozenset({"us-east-1", "us-east-2"})
 
+#: GPT-6.1 Terra in-Region availability on the mantle endpoint: ``us-east-1``
+#: ONLY (live probe: us-east-2 -> 404 "model does not exist"). A subset of
+#: :data:`GPT_REGIONS` / the adapter's ``SUPPORTED_REGIONS``; the per-model
+#: restriction lives here, not in the adapter.
+TERRA_REGIONS: frozenset[str] = frozenset({"us-east-1"})
+
 #: Amazon Nova regions (Seoul + common US/EU) plus where cross-region profiles
 #: route. Seoul (``ap-northeast-2``) is the default finder/triage home.
 NOVA_REGIONS: frozenset[str] = frozenset(
@@ -113,8 +119,17 @@ PROFILE_PREFIXES: tuple[str, ...] = (
 # known-model registry                                                         #
 # --------------------------------------------------------------------------- #
 KNOWN_MODELS: dict[str, ModelInfo] = {
+    # Verifier / judge — GPT-6.1 Terra via mantle Responses (strict region,
+    # us-east-1 ONLY). LIVE-PROBED with a forced STRICT tool + every
+    # reasoning.effort in {none,low,medium,high,xhigh,max}.
+    "openai.gpt-6.1-terra": ModelInfo(
+        model_id="openai.gpt-6.1-terra",
+        adapter=ADAPTER_RESPONSES,
+        allowed_regions=TERRA_REGIONS,
+        region_strict=True,
+    ),
     # Verifier / judge — GPT-5.4 via mantle Responses (strict region). The
-    # decided default verifier (LIVE-VERIFIED on the bedrock-mantle Responses
+    # previous default verifier (LIVE-VERIFIED on the bedrock-mantle Responses
     # endpoint in us-east-2 with a forced STRICT tool + reasoning.effort=medium).
     "openai.gpt-5.4": ModelInfo(
         model_id="openai.gpt-5.4",

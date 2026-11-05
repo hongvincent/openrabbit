@@ -293,7 +293,9 @@ def test_default_reasoning_effort_is_medium(bearer_env, monkeypatch):
     assert rec.json_body["reasoning"] == {"effort": "medium"}
 
 
-@pytest.mark.parametrize("effort", ["none", "low", "medium", "high", "xhigh"])
+# "max" was LIVE-PROBED accepted (HTTP 200) on openai.gpt-6.1-terra via mantle
+# us-east-1 and is documented for 6.1 Terra; the other five are accepted too.
+@pytest.mark.parametrize("effort", ["none", "low", "medium", "high", "xhigh", "max"])
 def test_valid_reasoning_efforts(bearer_env, monkeypatch, effort):
     adapter = OpenAIResponsesAdapter()
     rec = _Recorder(_text_payload())
