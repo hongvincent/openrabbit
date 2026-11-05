@@ -14,7 +14,7 @@ instead of only being noticed when someone spends real money on the live gate.
 
 Pins guarded:
 * finder/triage -> ``global.amazon.nova-2-lite-v1:0`` (Seoul Converse)
-* verifier/judge -> ``openai.gpt-5.4`` (us-east-2 Responses)
+* verifier/judge -> ``openai.gpt-6.1-terra`` (us-east-1 Responses)
 and the negative invariant: neither pinned model is in the deprecated registry.
 """
 
